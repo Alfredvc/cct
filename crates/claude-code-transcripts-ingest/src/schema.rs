@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS assistant_entries (
     context_management              JSON,
     request_id                      TEXT,
     is_api_error_message            BOOLEAN,
+    api_error_status                SMALLINT,
     error                           TEXT,
     tool_use_count                  INTEGER,
     cost_usd                        DOUBLE,
@@ -198,7 +199,8 @@ CREATE TABLE IF NOT EXISTS attachment_entries (
     nested_memory_path              TEXT,
     nested_memory_memory_type       TEXT,
     nested_memory_content           TEXT,
-    nested_memory_differs_from_disk BOOLEAN
+    nested_memory_differs_from_disk BOOLEAN,
+    deferred_readded_names          JSON
 );
 
 CREATE TABLE IF NOT EXISTS progress_entries (
@@ -680,4 +682,6 @@ COMMENT ON COLUMN assistant_entries.stop_reason IS
 'Set only on the final entry of a streaming response (the one that received message_delta). Used as the primary dedup tiebreaker — rows with stop_reason set are the authoritative billing record.';
 COMMENT ON COLUMN assistant_entries.is_api_error_message IS
 'TRUE = synthetic error surfaced to the user, not a real API response. Paired with message_id IS NULL and model = ''<synthetic>''. Never billed — exclude from cost aggregation.';
+COMMENT ON COLUMN assistant_entries.api_error_status IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped for distributions. HTTP status code (e.g. 401, 429, 400, 403) returned by the API when the turn errored. Populated alongside error / is_api_error_message on failed turns; NULL on successful turns.';
 "#;

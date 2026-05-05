@@ -1624,7 +1624,7 @@ mod tests {
 
     #[test]
     fn assistant_entry_round_trip_with_attribution_and_diagnostics() {
-        let json = r#"{"uuid":"a1","parentUuid":null,"isSidechain":true,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"assistant","attributionAgent":"agentfiles:task-implementer","attributionPlugin":"agentfiles","message":{"id":"msg1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1},"diagnostics":{"cache_miss_reason":{"type":"messages_changed","cache_missed_input_tokens":204}}}}"#;
+        let json = r#"{"uuid":"a1","parentUuid":null,"isSidechain":true,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"assistant","attributionAgent":"plugin1:agent1","attributionPlugin":"plugin1","message":{"id":"msg1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1},"diagnostics":{"cache_miss_reason":{"type":"messages_changed","cache_missed_input_tokens":204}}}}"#;
         let v: Entry = serde_json::from_str(json).unwrap();
         let back = serde_json::to_string(&v).unwrap();
 

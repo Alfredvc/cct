@@ -868,37 +868,38 @@ fn build_assistant(
         .count();
 
     let row = vec![
-        Value::Null,                           // entry_id
-        s_str(&m.id),                          // message_id
-        s_str(&role),                          // role
-        s_str(model_str),                      // model
-        opt_opt_json(&m.container),            // container
-        s(m.stop_reason.clone()),              // stop_reason
-        s(m.stop_sequence.clone()),            // stop_sequence
-        opt_opt_json(&m.stop_details),         // stop_details
-        opt_opt_json(&m.context_management),   // context_management
-        s(ae.request_id.clone()),              // request_id
-        ob(ae.is_api_error_message),           // is_api_error_message
-        s(ae.error.clone()),                   // error
-        u(tool_use_count as u64),              // tool_use_count
-        of(cost),                              // cost_usd
-        u(usage.input_tokens),                 // input_tokens
-        u(usage.output_tokens),                // output_tokens
-        ou(usage.cache_creation_input_tokens), // cache_creation_input_tokens
-        ou(usage.cache_read_input_tokens),     // cache_read_input_tokens
-        ou(cache_5m),                          // cache_creation_5m
-        ou(cache_1h),                          // cache_creation_1h
-        ou(web_search),                        // web_search_requests
-        ou(web_fetch),                         // web_fetch_requests
-        opt_opt_json(&usage.service_tier),     // service_tier
-        opt_opt_json(&usage.inference_geo),    // inference_geo
-        opt_opt_json(&usage.iterations),       // iterations
-        opt_opt_json(&usage.speed),            // speed
-        s(ae.attribution_agent.clone()),       // attribution_agent
-        s(ae.attribution_plugin.clone()),      // attribution_plugin
-        s(ae.attribution_skill.clone()),       // attribution_skill
-        s(cmr_type),                           // cache_miss_reason_type
-        ou(cmr_tokens),                        // cache_missed_input_tokens
+        Value::Null,                                 // entry_id
+        s_str(&m.id),                                // message_id
+        s_str(&role),                                // role
+        s_str(model_str),                            // model
+        opt_opt_json(&m.container),                  // container
+        s(m.stop_reason.clone()),                    // stop_reason
+        s(m.stop_sequence.clone()),                  // stop_sequence
+        opt_opt_json(&m.stop_details),               // stop_details
+        opt_opt_json(&m.context_management),         // context_management
+        s(ae.request_id.clone()),                    // request_id
+        ob(ae.is_api_error_message),                 // is_api_error_message
+        ou32(ae.api_error_status.map(|v| v as u32)), // api_error_status
+        s(ae.error.clone()),                         // error
+        u(tool_use_count as u64),                    // tool_use_count
+        of(cost),                                    // cost_usd
+        u(usage.input_tokens),                       // input_tokens
+        u(usage.output_tokens),                      // output_tokens
+        ou(usage.cache_creation_input_tokens),       // cache_creation_input_tokens
+        ou(usage.cache_read_input_tokens),           // cache_read_input_tokens
+        ou(cache_5m),                                // cache_creation_5m
+        ou(cache_1h),                                // cache_creation_1h
+        ou(web_search),                              // web_search_requests
+        ou(web_fetch),                               // web_fetch_requests
+        opt_opt_json(&usage.service_tier),           // service_tier
+        opt_opt_json(&usage.inference_geo),          // inference_geo
+        opt_opt_json(&usage.iterations),             // iterations
+        opt_opt_json(&usage.speed),                  // speed
+        s(ae.attribution_agent.clone()),             // attribution_agent
+        s(ae.attribution_plugin.clone()),            // attribution_plugin
+        s(ae.attribution_skill.clone()),             // attribution_skill
+        s(cmr_type),                                 // cache_miss_reason_type
+        ou(cmr_tokens),                              // cache_missed_input_tokens
     ];
 
     let mut block_rows: Vec<Vec<Value>> = Vec::new();
@@ -1084,7 +1085,7 @@ fn build_attachment(
 ) -> BuiltRows {
     use AttachmentData::*;
     // Initialise wide row as all NULL then fill the relevant slots.
-    let mut row: Vec<Value> = vec![Value::Null; 47];
+    let mut row: Vec<Value> = vec![Value::Null; 48];
     // index 0 = entry_id placeholder, index 1 = attachment_type
     let mut diag_rows: Vec<Vec<Value>> = Vec::new();
     let mut skill_rows: Vec<Vec<Value>> = Vec::new();
@@ -1139,7 +1140,8 @@ fn build_attachment(
     // 36 deferred_removed_names, 37 mcp_added_names, 38 mcp_added_blocks,
     // 39 mcp_removed_names, 40 ultrathink_level, 41 queued_command_prompt,
     // 42 queued_command_mode, 43 nested_memory_path, 44 nested_memory_memory_type,
-    // 45 nested_memory_content, 46 nested_memory_differs_from_disk
+    // 45 nested_memory_content, 46 nested_memory_differs_from_disk,
+    // 47 deferred_readded_names
 
     let fill_hook = |row: &mut Vec<Value>,
                      h: &claude_code_transcripts::types::HookResultAttachment| {
@@ -1311,7 +1313,7 @@ fn build_attachment(
             added_names,
             added_lines,
             removed_names,
-            readded_names: _,
+            readded_names,
         } => {
             row[34] = json_str(&json!(added_names));
             row[35] = match added_lines {
@@ -1322,6 +1324,10 @@ fn build_attachment(
                 Some(v) => json_str(&json!(v)),
                 None => Value::Null,
             };
+            row[47] = match readded_names {
+                Some(v) => json_str(&json!(v)),
+                None => Value::Null,
+            };
         }
         AgentListingDelta { .. } => {
             // Classify-only: attachment_type column captures the variant.
@@ -1329,8 +1335,19 @@ fn build_attachment(
             // /showConcurrencyNote) are not flattened into dedicated columns —
             // the agent listing payload is verbose and out of scope here.
         }
-        AutoMode { .. } | AutoModeExit | PlanFileReference { .. } => {
+        AutoMode { .. } | AutoModeExit => {
             // Classify-only: attachment_type captures the variant.
+        }
+        PlanFileReference {
+            plan_file_path,
+            plan_content,
+        } => {
+            // Reuse the file-shaped columns (filename + file_content_text)
+            // for plan path + content. Mirrors NestedMemory's path+content
+            // pattern but at column indices that already carry path/content
+            // semantics for File / EditedTextFile / CompactFileReference.
+            row[12] = s_str(plan_file_path);
+            row[13] = s_str(plan_content);
         }
         McpInstructionsDelta {
             added_names,
