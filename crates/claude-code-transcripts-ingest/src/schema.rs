@@ -111,6 +111,11 @@ CREATE TABLE IF NOT EXISTS assistant_entries (
     inference_geo                   JSON,
     iterations                      JSON,
     speed                           JSON,
+    attribution_agent               TEXT,
+    attribution_plugin              TEXT,
+    attribution_skill               TEXT,
+    cache_miss_reason_type          TEXT,
+    cache_missed_input_tokens       BIGINT,
     cost_per_tool_use DOUBLE GENERATED ALWAYS AS (cost_usd / NULLIF(tool_use_count, 0)) VIRTUAL
 );
 
@@ -488,6 +493,7 @@ COMMENT ON COLUMN assistant_entries_deduped.cache_creation_input_tokens IS 'Safe
 COMMENT ON COLUMN assistant_entries_deduped.cache_read_input_tokens     IS 'Safe to SUM. See table-level comment.';
 COMMENT ON COLUMN assistant_entries_deduped.cache_creation_5m           IS 'Safe to SUM. See table-level comment.';
 COMMENT ON COLUMN assistant_entries_deduped.cache_creation_1h           IS 'Safe to SUM. See table-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_missed_input_tokens   IS 'Safe to SUM. See table-level comment.';
 "#;
 
 pub const TOOL_USES_VIEW_DDL: &str = r#"
@@ -562,6 +568,9 @@ CREATE INDEX IF NOT EXISTS idx_entries_parent_uuid   ON entries(parent_uuid);
 CREATE INDEX IF NOT EXISTS idx_entries_file_path     ON entries(file_path);
 CREATE INDEX IF NOT EXISTS idx_assistant_model       ON assistant_entries(model);
 CREATE INDEX IF NOT EXISTS idx_assistant_cost        ON assistant_entries(cost_usd);
+CREATE INDEX IF NOT EXISTS idx_assistant_attribution_agent     ON assistant_entries(attribution_agent);
+CREATE INDEX IF NOT EXISTS idx_assistant_attribution_skill     ON assistant_entries(attribution_skill);
+CREATE INDEX IF NOT EXISTS idx_assistant_cache_miss_reason     ON assistant_entries(cache_miss_reason_type);
 CREATE INDEX IF NOT EXISTS idx_assistant_block_tool  ON assistant_content_blocks(tool_name);
 CREATE INDEX IF NOT EXISTS idx_attachment_type       ON attachment_entries(attachment_type);
 CREATE INDEX IF NOT EXISTS idx_transcripts_session   ON transcripts(session_id);
@@ -655,6 +664,16 @@ COMMENT ON COLUMN assistant_entries.cache_creation_5m IS
 '⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
 COMMENT ON COLUMN assistant_entries.cache_creation_1h IS
 '⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
+COMMENT ON COLUMN assistant_entries.cache_missed_input_tokens IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped. Number of input tokens that missed prompt caching, when known. NULL when cache_miss_reason_type is unavailable / previous_message_not_found, or when no diagnostics were emitted.';
+COMMENT ON COLUMN assistant_entries.cache_miss_reason_type IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks (same caveat as cost_usd) — counts inflate by ~2-3×. Use assistant_entries_deduped for distributions. API-emitted reason for prompt-cache miss on this turn. Raw string from message.diagnostics.cache_miss_reason.type — values seen in the wild: tools_changed, messages_changed, system_changed, params_changed, model_changed, previous_message_not_found, unavailable. NULL when no diagnostics were emitted.';
+COMMENT ON COLUMN assistant_entries.attribution_agent IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped for distributions. Subagent slug that produced this turn. Format: <plugin>:<agent> for plugin-namespaced agents, or bare <agent> for built-in agents. NULL on top-level turns.';
+COMMENT ON COLUMN assistant_entries.attribution_plugin IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped for distributions. Plugin namespace owning the subagent for this turn. NULL when attribution_agent is bare or absent. Canonical when this field and the <plugin>: prefix of attribution_agent disagree — trust this field.';
+COMMENT ON COLUMN assistant_entries.attribution_skill IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped for distributions. Skill slug invoked on this turn. Format: <plugin>:<skill> for plugin-namespaced skills, or bare <skill> for built-in skills. NULL when no skill is active for this turn.';
 COMMENT ON COLUMN assistant_entries.message_id IS
 'API-assigned billing ID. NOT unique within a file: one streaming response writes N entries (one per content block) sharing the same message_id. NULL = synthetic error message (is_api_error_message = true) that was never billed. Dedup on (file_path, message_id) for one-row-per-billing-event semantics.';
 COMMENT ON COLUMN assistant_entries.stop_reason IS
