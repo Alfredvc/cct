@@ -326,6 +326,12 @@ pub struct AssistantEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 
+    /// HTTP status returned by the API when the turn errored (e.g. 401, 429,
+    /// 400, 403). Populated alongside `error` / `is_api_error_message` on
+    /// failed turns; absent on successful turns.
+    #[serde(rename = "apiErrorStatus", skip_serializing_if = "Option::is_none")]
+    pub api_error_status: Option<u16>,
+
     /// Subagent / plugin slug that produced this turn. Format `<plugin>:<agent>`
     /// when emitted by a plugin-namespaced agent, or bare `<agent>` for
     /// built-in agents. Absent on top-level turns.
@@ -1606,6 +1612,19 @@ mod tests {
         // Note: `attributionSkill` value is opaque (user-specific plugin slug).
         // Test fixture uses neutral placeholders — values are not part of the schema contract.
         let json = r#"{"uuid":"a2","parentUuid":null,"isSidechain":true,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"assistant","attributionAgent":"plugin1:agent1","attributionPlugin":"plugin1","attributionSkill":"plugin1:skill1","message":{"id":"msg1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        let v: Entry = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
+    }
+
+    /// `apiErrorStatus` on assistant turn round-trips as a u16. Field is
+    /// populated alongside `error` / `isApiErrorMessage` on failed turns.
+    #[test]
+    fn assistant_entry_round_trip_with_api_error_status() {
+        let json = r#"{"uuid":"a4","parentUuid":null,"isSidechain":false,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"assistant","isApiErrorMessage":true,"error":"rate limit","apiErrorStatus":429,"message":{"id":"msg1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}}"#;
         let v: Entry = serde_json::from_str(json).unwrap();
         let back = serde_json::to_string(&v).unwrap();
 
