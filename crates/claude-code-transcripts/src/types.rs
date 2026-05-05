@@ -1292,11 +1292,11 @@ pub struct SpeculationAcceptEntry {
 // ---------------------------------------------------------------------------
 mod opt_nullable {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde_json::Value;
 
-    pub fn serialize<S>(val: &Option<Option<Value>>, ser: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S, T>(val: &Option<Option<T>>, ser: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
+        T: Serialize,
     {
         match val {
             None => unreachable!("skip_serializing_if = \"Option::is_none\" should prevent this"),
@@ -1304,11 +1304,12 @@ mod opt_nullable {
         }
     }
 
-    pub fn deserialize<'de, D>(de: D) -> Result<Option<Option<Value>>, D::Error>
+    pub fn deserialize<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
     where
         D: Deserializer<'de>,
+        T: Deserialize<'de>,
     {
-        Ok(Some(Option::<Value>::deserialize(de)?))
+        Ok(Some(Option::<T>::deserialize(de)?))
     }
 }
 
