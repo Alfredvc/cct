@@ -57,13 +57,13 @@ cct serve [--db <file>] [--port <n>]
 
 Every session at a glance — cost, tokens, tools used, subagent flag. Filter by project, tool, model, or cost range; sort by most recent or highest spend.
 
-![cct serve sessions](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/sessions.png)
+![cct serve sessions](https://raw.githubusercontent.com/alfredvc/cct/main/docs/assets/sessions.png)
 
 #### Transcripts
 
 Browse by project → session → turn-by-turn timeline. Every assistant turn shows its exact cost: input, output, cache-read, and cache-creation tokens with the resulting dollar amount. Subagent calls expand inline so you can trace the full cost of any delegated task back to the turn that triggered it.
 
-![cct serve transcripts](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/transcripts.png)
+![cct serve transcripts](https://raw.githubusercontent.com/alfredvc/cct/main/docs/assets/transcripts.png)
 
 #### Dashboard
 
@@ -96,7 +96,7 @@ A multi-panel cost dashboard split into two sub-tabs. Switch between them with t
 - Cache Health
 - Session Distribution (by turn count)
 
-![cct serve dashboard](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/dashboard.png)
+![cct serve dashboard](https://raw.githubusercontent.com/alfredvc/cct/main/docs/assets/dashboard.png)
 
 ### `cct info`
 

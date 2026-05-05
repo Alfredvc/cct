@@ -10,7 +10,7 @@ version = "0.1.10"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Alfredo V. Clemente <aemente91@gmail.com>"]
-repository = "https://github.com/alfredvc/claude-usage-optimization"
+repository = "https://github.com/alfredvc/cct"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

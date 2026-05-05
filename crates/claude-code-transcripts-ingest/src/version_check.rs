@@ -123,7 +123,7 @@ pub(crate) fn deterministic_gates_open(cmd: &Command, env_disabled: bool) -> boo
 }
 
 const REPO_OWNER: &str = "Alfredvc";
-const REPO_NAME: &str = "claude-usage-optimization";
+const REPO_NAME: &str = "cct";
 
 pub(crate) fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Hit GitHub's `/repos/{owner}/{name}/releases/latest` endpoint directly

@@ -1,7 +1,7 @@
 use crate::cli::UpdateArgs;
 
 const REPO_OWNER: &str = "Alfredvc";
-const REPO_NAME: &str = "claude-usage-optimization";
+const REPO_NAME: &str = "cct";
 const BIN_NAME: &str = "cct";
 
 fn detect_target() -> Result<&'static str, String> {

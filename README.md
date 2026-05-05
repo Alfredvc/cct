@@ -1,41 +1,41 @@
-<h1 align="center">Claude Usage Optimization</h1>
+<h1 align="center">cct — Claude Code Transcripts</h1>
 
 <p align="center">
-  <img src="docs/assets/readme_banner.png" alt="Claude Usage Optimization banner" width="800" />
+  <img src="docs/assets/readme_banner.png" alt="cct banner" width="800" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/alfredvc/claude-usage-optimization/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alfredvc/claude-usage-optimization/ci.yml?branch=main&label=CI" alt="CI" /></a>
-  <a href="https://github.com/alfredvc/claude-usage-optimization/releases"><img src="https://img.shields.io/github/v/release/alfredvc/claude-usage-optimization" alt="Release" /></a>
+  <a href="https://github.com/alfredvc/cct/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alfredvc/cct/ci.yml?branch=main&label=CI" alt="CI" /></a>
+  <a href="https://github.com/alfredvc/cct/releases"><img src="https://img.shields.io/github/v/release/alfredvc/cct" alt="Release" /></a>
   <a href="https://crates.io/crates/claude-code-transcripts-ingest"><img src="https://img.shields.io/crates/v/claude-code-transcripts-ingest.svg" alt="crates.io" /></a>
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License: MIT OR Apache-2.0" /></a>
 </p>
 
-**Let Claude audit its own bill.** Agent skills that turn every transcript under `~/.claude/projects` into a local DuckDB, then let Claude run SQL over your own history and return a dollar-ranked optimization report. Actionable insights backed by your own usage, not generic advice.
+**Your Claude Code transcripts as SQL.** `cct` ingests every transcript under `~/.claude/projects` into a local DuckDB. Skills tell Claude how to investigate it — so you can ask questions about your own usage in plain English and get answers backed by your real history, not generic advice.
 
-Skills pair with `claude-code-transcripts-ingest` (`cct`), the Rust binary in this repo that ingests your transcripts into DuckDB.
+The primitive is the database. The skills are playbooks on top. Cost optimization is one playbook; you can write your own.
 
 ## Install
 
-### 1. Skills
-
-Install for Claude Code
+### 1. `cct` binary
 
 ```bash
-npx skills add alfredvc/claude-usage-optimization
-```
-
-### 2. `cct` (required)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Alfredvc/claude-usage-optimization/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Alfredvc/cct/main/install.sh | sh
 ```
 
 Downloads the latest prebuilt `cct` binary into `~/.local/bin`. Override with `CCT_INSTALL_DIR=/some/dir` or pin a version with `CCT_VERSION=v0.2.0`. Source: [`crates/claude-code-transcripts-ingest/`](crates/claude-code-transcripts-ingest/).
 
 After install, upgrade in place with `cct update` (or `cct update --version v0.2.0` to pin). `cct` checks GitHub for a newer release once every 24 hours in the background and prints a one-line banner on stderr when one is available. Set `CCT_NO_UPDATE_CHECK=1` (or `CI=true`) to disable. Cache lives at `~/.cache/cct/update_check.json`.
 
-### 3. DuckDB CLI (required)
+### 2. Skills
+
+```bash
+npx skills add alfredvc/cct
+```
+
+Installs the agent skills below into Claude Code.
+
+### 3. DuckDB CLI
 
 Skills query the DB via the `duckdb` CLI. Install from [duckdb.org](https://duckdb.org/install/?platform=macos&environment=cli) or:
 
@@ -49,24 +49,33 @@ curl https://install.duckdb.org | sh
 cct ingest
 ```
 
-Then ask Claude `/optimize-usage`.
+Then ask Claude anything about your usage:
 
-The skill runs a multi-phase investigation against your own DB: measures spend categories, inspects raw high-cost turns, disconfirms shallow leads, then ranks concrete levers by dollar impact.
+- "What did I spend on Opus last week?"
+- "Which sessions had the most cache invalidations?"
+- "Show me the 10 most expensive turns and what they were doing."
+- "How much is the `frontend-design` skill costing me per invocation?"
 
-## Tips
-If you have any hypothesis as to what could be consuming your usage, ask Claude, it is excellent at testing them with cct.
+Claude picks up the schema from the `claude-usage-db` skill and runs SQL against your local DB.
 
-## Available skills
+## Skills
 
-- **claude-usage-db** — schema and SQL recipes so Claude can query the transcripts DB efficiently.
-- **optimize-usage** — gives Claude the tools to investigate your usage and return concrete, dollar-ranked fixes to reduce it. Built on `claude-usage-db`.
+Skills are investigation playbooks. They give Claude the schema, recipes, and methodology to answer specific classes of question. Mix and match — or write your own.
+
+- **`claude-usage-db`** — the foundation. DB schema, common SQL recipes, and guidance for querying transcripts efficiently. Every other skill builds on this.
+- **`optimize-usage`** — diagnose Claude Code spend and return a dollar-ranked optimization report. Multi-phase: measure spend categories, inspect raw high-cost turns, disconfirm shallow leads, rank concrete fixes.
+
+Want to investigate something else — tool latency, prompt patterns, error rates, skill ROI? Build a skill on top of `claude-usage-db`. The DB has the data; you write the playbook.
+
+## Tip
+If you have a hypothesis about what's driving your usage, just ask Claude. It's good at testing hypotheses with `cct`.
 
 ## Explore sessions in the viewer
 
 `cct serve` opens an embedded web viewer at `http://localhost:8766`. Pick a project → session to drill in turn-by-turn.
 
 - **Per-turn cost.** Each assistant turn shows model, timestamp, and dollar cost — with input / cache-read / cache-write / output split as colored bars against the session total.
-- **Activity at a glance.** Pills tag what the turn did: thinking (💭), text (💬), tool calls (🔧). An activity panel rolls up cost and call count per tool so the budget-eaters stand out.
+- **Activity at a glance.** Pills tag what the turn did: thinking, text, tool calls. An activity panel rolls up cost and call count per tool so the budget-eaters stand out.
 - **Subagent expansion.** Subagent calls expand inline and lazy-load their full transcript, so you can trace delegated work — and its cost — back to the parent turn that spawned it.
 - **Cumulative cost chart.** Area chart above the timeline plots spend over the whole session. Click any dot to jump to and highlight that turn.
 - **Session rollup.** Fixed header shows total cost, API call count, and token totals by type.

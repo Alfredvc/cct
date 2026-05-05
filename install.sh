@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="Alfredvc/claude-usage-optimization"
+REPO="Alfredvc/cct"
 BINARY="cct"
 INSTALL_DIR="${CCT_INSTALL_DIR:-${HOME}/.local/bin}"
 

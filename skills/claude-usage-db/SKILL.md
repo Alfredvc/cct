@@ -734,7 +734,7 @@ command -v duckdb >/dev/null && duckdb --version || echo "duckdb not installed"
 If `cct` is missing — ask the user first (external install):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Alfredvc/claude-usage-optimization/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Alfredvc/cct/main/install.sh | sh
 # installs prebuilt binary to ~/.local/bin (override with CCT_INSTALL_DIR=..., pin with CCT_VERSION=v0.2.0)
 ```
 
