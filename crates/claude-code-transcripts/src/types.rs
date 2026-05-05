@@ -325,6 +325,18 @@ pub struct AssistantEntry {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+
+    /// Subagent / plugin slug that produced this turn. Format `<plugin>:<agent>`
+    /// when emitted by a plugin-namespaced agent, or bare `<agent>` for
+    /// built-in agents. Absent on top-level turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution_agent: Option<String>,
+
+    /// Plugin namespace owning the subagent for this turn. Canonical when it
+    /// disagrees with the `<plugin>:` prefix of `attribution_agent`. Absent
+    /// when `attribution_agent` is bare or absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution_plugin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1550,6 +1562,17 @@ mod tests {
         );
         let back = serde_json::to_string(&v).unwrap();
         assert_eq!(back, json, "absent field must not re-emit as null");
+    }
+
+    #[test]
+    fn assistant_entry_round_trip_with_attribution_and_diagnostics() {
+        let json = r#"{"uuid":"a1","parentUuid":null,"isSidechain":true,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"assistant","attributionAgent":"agentfiles:task-implementer","attributionPlugin":"agentfiles","message":{"id":"msg1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1},"diagnostics":{"cache_miss_reason":{"type":"messages_changed","cache_missed_input_tokens":204}}}}"#;
+        let v: Entry = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
     }
 }
 
