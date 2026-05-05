@@ -40,8 +40,23 @@ fn main() {
 
     sync_web_src(&web_src, &web_out);
 
-    if !web_out.join("node_modules").exists() {
+    // Re-run `npm ci` when node_modules is missing OR the package-lock has
+    // changed since the last install. We track the latter via a stamp file
+    // that holds the lockfile's bytes from the previous successful ci run —
+    // checking node_modules existence alone misses dep additions.
+    let lockfile = web_out.join("package-lock.json");
+    let stamp = web_out.join("node_modules/.cct-ci-stamp");
+    let cur_lock = std::fs::read(&lockfile).ok();
+    let stamp_content = std::fs::read(&stamp).ok();
+    let needs_install =
+        !web_out.join("node_modules").exists() || cur_lock.as_ref() != stamp_content.as_ref();
+    if needs_install {
         run(&npm, &["ci", "--silent"], &web_out, &[]);
+        if let Some(bytes) = cur_lock {
+            // Best-effort: stamp survives across cargo builds; failure here
+            // just means we re-run `npm ci` next time.
+            std::fs::write(&stamp, bytes).ok();
+        }
     }
 
     run(
