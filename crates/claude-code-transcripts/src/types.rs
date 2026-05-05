@@ -941,6 +941,31 @@ pub struct DiagnosticsFile {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Cache-miss diagnostic emitted by the API on `AssistantMessage`. Indicates
+/// why prompt caching did not hit on this turn and (when known) how many
+/// input tokens missed the cache.
+///
+/// `kind` is kept as `String` (not an enum with `#[serde(other)]`) so the
+/// raw value flows through to the ingest column without being collapsed
+/// into a generic `Unknown` bucket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheMissReason {
+    #[serde(rename = "type")]
+    pub kind: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_missed_input_tokens: Option<u64>,
+}
+
+/// Diagnostics container on `AssistantMessage`. Currently always shaped as
+/// `{ "cache_miss_reason": … }` but boxed as a struct so future sibling
+/// keys can be added without breaking deserialization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssistantDiagnostics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_miss_reason: Option<CacheMissReason>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub message: String,
@@ -1447,6 +1472,38 @@ mod tests {
         }"#;
         let v: AssistantMessage = serde_json::from_str(json).unwrap();
         assert!(v.model.is_none());
+    }
+
+    /// AssistantDiagnostics round-trips with cache_miss_reason and an
+    /// optional cache_missed_input_tokens count.
+    #[test]
+    fn assistant_diagnostics_round_trip_with_tokens() {
+        let json =
+            r#"{"cache_miss_reason":{"type":"tools_changed","cache_missed_input_tokens":41735}}"#;
+        let v: AssistantDiagnostics = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+        assert_eq!(back, json);
+    }
+
+    /// cache_missed_input_tokens is optional — absent on `unavailable` /
+    /// `previous_message_not_found` variants seen in real transcripts.
+    #[test]
+    fn assistant_diagnostics_round_trip_without_tokens() {
+        let json = r#"{"cache_miss_reason":{"type":"unavailable"}}"#;
+        let v: AssistantDiagnostics = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+        assert_eq!(back, json);
+    }
+
+    /// Unknown cache_miss_reason.type values must pass through as-is, not error.
+    /// (We intentionally keep `kind` as String, not an enum, to preserve the
+    /// raw string for the ingest column.)
+    #[test]
+    fn assistant_diagnostics_unknown_kind_passes_through() {
+        let json = r#"{"cache_miss_reason":{"type":"future_reason_not_yet_seen"}}"#;
+        let v: AssistantDiagnostics = serde_json::from_str(json).unwrap();
+        let cmr = v.cache_miss_reason.as_ref().expect("cache_miss_reason set");
+        assert_eq!(cmr.kind, "future_reason_not_yet_seen");
     }
 }
 
