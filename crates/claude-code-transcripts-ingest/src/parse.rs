@@ -1295,6 +1295,7 @@ fn build_attachment(
             added_names,
             added_lines,
             removed_names,
+            readded_names: _,
         } => {
             row[34] = json_str(&json!(added_names));
             row[35] = match added_lines {

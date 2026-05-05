@@ -870,6 +870,10 @@ pub enum AttachmentData {
         added_lines: Option<Vec<String>>,
         #[serde(rename = "removedNames", skip_serializing_if = "Option::is_none")]
         removed_names: Option<Vec<String>>,
+        /// Tools that were previously removed and have been re-added on this
+        /// turn. Disjoint from `addedNames` (which lists newly-added tools).
+        #[serde(rename = "readdedNames", skip_serializing_if = "Option::is_none")]
+        readded_names: Option<Vec<String>>,
     },
 
     McpInstructionsDelta {
@@ -1636,6 +1640,18 @@ mod tests {
         let v: Entry = serde_json::from_str(json).unwrap();
         let back = serde_json::to_string(&v).unwrap();
 
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
+    }
+
+    /// `deferred_tools_delta` with `readdedNames` round-trips. Also covers
+    /// the omit-when-absent case implicitly via prior tests.
+    #[test]
+    fn attachment_deferred_tools_delta_with_readded_names_round_trips() {
+        let json = r#"{"uuid":"a7","parentUuid":null,"isSidechain":false,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"attachment","attachment":{"type":"deferred_tools_delta","addedNames":["A"],"addedLines":["- A: foo"],"removedNames":["B"],"readdedNames":["C"]}}"#;
+        let v: Entry = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
         let original: serde_json::Value = serde_json::from_str(json).unwrap();
         let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
         assert_eq!(roundtripped, original);
