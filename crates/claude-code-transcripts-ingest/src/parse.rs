@@ -837,6 +837,16 @@ fn build_assistant(
     };
 
     let model_str = m.model.as_deref().unwrap_or("");
+
+    let (cmr_type, cmr_tokens): (Option<String>, Option<u64>) =
+        match m.diagnostics.as_ref().and_then(|outer| outer.as_ref()) {
+            Some(diag) => match diag.cache_miss_reason.as_ref() {
+                Some(cmr) => (Some(cmr.kind.clone()), cmr.cache_missed_input_tokens),
+                None => (None, None),
+            },
+            None => (None, None),
+        };
+
     let cost = compute_cost(
         pricing,
         model_str,
@@ -884,6 +894,11 @@ fn build_assistant(
         opt_opt_json(&usage.inference_geo),    // inference_geo
         opt_opt_json(&usage.iterations),       // iterations
         opt_opt_json(&usage.speed),            // speed
+        s(ae.attribution_agent.clone()),       // attribution_agent
+        s(ae.attribution_plugin.clone()),      // attribution_plugin
+        s(ae.attribution_skill.clone()),       // attribution_skill
+        s(cmr_type),                           // cache_miss_reason_type
+        ou(cmr_tokens),                        // cache_missed_input_tokens
     ];
 
     let mut block_rows: Vec<Vec<Value>> = Vec::new();
@@ -1665,5 +1680,30 @@ mod tests {
         assert_eq!(r2[1], serde_json::json!("todo_reminder"));
         assert_eq!(r2[29], serde_json::json!("[]"));
         assert_eq!(r2[30], serde_json::json!(0));
+    }
+
+    /// Assistant entry carrying attributionAgent, attributionPlugin,
+    /// attributionSkill, and message.diagnostics.cache_miss_reason ingests
+    /// cleanly with no parse failures and no unknown variants. Regression
+    /// test for the 2026-05-05 transcript shape change.
+    #[test]
+    fn assistant_attribution_and_diagnostics_parse_clean() {
+        let line = format!(
+            r#"{{"type":"assistant","uuid":"x1",{ENVELOPE},"attributionAgent":"plugin1:agent1","attributionPlugin":"plugin1","attributionSkill":"plugin1:skill1","message":{{"id":"msg1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{{"input_tokens":10,"output_tokens":5}},"diagnostics":{{"cache_miss_reason":{{"type":"tools_changed","cache_missed_input_tokens":41735}}}}}}}}"#
+        );
+        let tmp = TempJsonl::new(&line);
+        let parsed = parse_file(tmp.path(), &HashMap::new());
+
+        assert!(
+            parsed.failures.is_empty(),
+            "unexpected failures: {:?}",
+            parsed.failures
+        );
+        assert_eq!(parsed.entries.len(), 1, "entry should be ingested");
+        assert!(
+            parsed.unknown_variants.is_empty(),
+            "no unknown variants expected, got {:?}",
+            parsed.unknown_variants
+        );
     }
 }
