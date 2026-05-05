@@ -114,6 +114,12 @@ The **Dashboard** tab shows a multi-panel cost breakdown split into two sub-tabs
   <em>Dashboard — daily spend by model, sessions/week, outlier turns.</em>
 </p>
 
+<p align="center">
+  <img src="docs/assets/cost.png" alt="Cost breakdown: cumulative spend by content category" width="800" />
+  <br/>
+  <em>Cost breakdown — cumulative spend split by what's actually being billed: tool result reads, cached assistant output, system prompt, user messages, file attachments. Identifies which content category dominates your bill.</em>
+</p>
+
 ## `cct` reference
 
 Full `cct` reference can be found in [`crates/claude-code-transcripts-ingest/README.md`](crates/claude-code-transcripts-ingest/README.md).
