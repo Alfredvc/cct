@@ -1,6 +1,6 @@
 ---
 name: claude-usage-db
-description: Query the local DuckDB of ingested Claude Code transcripts (`~/.local/share/cct/transcripts.duckdb` by default, or `$XDG_DATA_HOME/cct/transcripts.duckdb`) to answer any question about sessions, costs, tokens, tools, models, cache hits, subagents, skills invoked, permission modes, or raw conversation data. Use this skill whenever the user wants to run SQL against that DB or asks analytical questions whose answer lives in it — "show me sessions from last week", "cost breakdown by model", "which tools did I call most", "how much on Opus yesterday", "pull the raw data", "find sessions where…", "longest sessions", "top Bash commands", "top files edited", "cache hit rate", "what skills have I used", "first-turn cache creation", "main-chain vs subagent cost", or any aggregate/filter/ranking over transcripts. Also use for **cumulative cost attribution** — "what would I save if I compacted bash outputs / trimmed file reads / shrunk CLAUDE.md", "how much is X costing me over the whole session", "is hook Y net-positive", "ROI of compressing tool outputs" — the cumulative model (cache_read paid on every later turn) and the pricing-JOIN sanity-check pattern live in `references/cumulative-cost-analysis.md`. Do NOT use for advice-shaped questions like "how do I reduce my spend" (that belongs to `optimize-usage`), for rebuilding the DB (that's the `cct` binary), or for questions about the transcripts file format itself. The DB has two critical billing footguns (raw `assistant_entries` overcounts cost ~2×; naive `model_pricing` LIKE-join inflates rates 2-3×) — this skill prevents both.
+description: Query the local DuckDB of ingested Claude Code transcripts (`~/.local/share/cct/transcripts.duckdb` by default, or `$XDG_DATA_HOME/cct/transcripts.duckdb`) to answer any question about sessions, costs, tokens, tools, models, cache hits, subagents, skills invoked, permission modes, or raw conversation data. Use this skill whenever the user wants to run SQL against that DB or asks analytical questions whose answer lives in it — "show me sessions from last week", "cost breakdown by model", "which tools did I call most", "how much on Opus yesterday", "pull the raw data", "find sessions where…", "longest sessions", "top Bash commands", "top files edited", "cache hit rate", "what skills have I used", "first-turn cache creation", "main-chain vs subagent cost", or any aggregate/filter/ranking over transcripts. Also use for **cache-miss diagnosis** — "why is my prompt cache thrashing", "which turns missed cache and why", "tools_changed cost" (`cache_miss_reason_type` / `cache_missed_input_tokens`); **per-skill / per-subagent cost** — "how much did skill X cost me", "Opus spend by subagent type" (`attribution_skill` / `attribution_agent`); and **API-error diagnostics** — "rate-limit errors", "529s by day" (`api_error_status`). Also use for **cumulative cost attribution** — "what would I save if I compacted bash outputs / trimmed file reads / shrunk CLAUDE.md", "how much is X costing me over the whole session", "is hook Y net-positive", "ROI of compressing tool outputs" — the cumulative model (cache_read paid on every later turn) and the pricing-JOIN sanity-check pattern live in `references/cumulative-cost-analysis.md`. Do NOT use for advice-shaped questions like "how do I reduce my spend" (that belongs to `optimize-usage`), for rebuilding the DB (that's the `cct` binary), or for questions about the transcripts file format itself. The DB has three critical aggregation footguns: raw `assistant_entries` overcounts cost ~2× (use `assistant_entries_deduped`); the same fan-out inflates `GROUP BY` over `cache_miss_reason_type` / `attribution_*` / `api_error_status` (`DO NOT GROUP BY raw`); naive `model_pricing` LIKE-join inflates rates 2-3× (use longest-prefix match) — this skill prevents all three. The new attribution / cache-miss / api-error / new-attachment columns only populate from ~2026-05-01 onward; historical entries have NULL.
 ---
 
 # Querying the Claude transcripts DuckDB
@@ -33,6 +33,35 @@ Same rule for `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `c
 
 **Three disjoint input buckets.** `input_tokens` (fresh), `cache_read_input_tokens`, and `cache_creation_input_tokens` are disjoint — the API bills each at its own rate. Don't add them looking for "total input cost"; `cost_usd` already combines them correctly. They're useful separately for diagnostics (cache hit rate, prefix invalidation signal, prompt-cache strategy).
 
+**`DO NOT GROUP BY raw` — the same fan-out hits categorical columns.** Cost/token columns aren't the only ones duplicated across content blocks. `cache_miss_reason_type`, `attribution_agent`, `attribution_plugin`, `attribution_skill`, and `api_error_status` carry the same N-row repetition. A naive `GROUP BY cache_miss_reason_type, COUNT(*)` against `assistant_entries` inflates counts 2-3× the same way `SUM(cost_usd)` does. Use `assistant_entries_deduped` for any distribution, ranking, or per-category aggregation over these columns. Schema comments mark them `⚠ DO NOT GROUP BY on raw`.
+
+---
+
+## Forward coverage of new columns (read second)
+
+A batch of fields was added to the JSONL transcript format on or around **2026-05-01**. Older entries do not carry them — the ingester writes NULL. Affected columns: `assistant_entries.attribution_agent`, `attribution_plugin`, `attribution_skill`, `cache_miss_reason_type`, `cache_missed_input_tokens`, `api_error_status`; `attachment_entries.deferred_readded_names`; `user_entries.image_paste_ids`, `plan_content`. New attachment variants emitted from then onward: `auto_mode`, `auto_mode_exit`, `agent_listing_delta`, `plan_file_reference`, `hook_stopped_continuation`, `hook_system_message`, `todo_reminder` (the latter three from ~2026-05-02).
+
+Practical consequence: any **share / distribution / coverage** query that mixes pre- and post-cutover entries will look like the field is sparsely populated. Either filter to `e.timestamp >= '2026-05-01'`, or use `COUNT(*) FILTER (WHERE col IS NOT NULL)` as the denominator instead of `COUNT(*)`. **Total-cost aggregation is unaffected** (`cost_usd` was always populated); only the new categorical/diagnostic fields have this gap.
+
+Quick activation check before relying on a new column:
+
+```sql
+SELECT MIN(e.timestamp) AS first_seen,
+       COUNT(*) FILTER (WHERE d.attribution_skill IS NOT NULL) AS with_attr,
+       COUNT(*)                                                AS total
+FROM assistant_entries_deduped d
+JOIN entries e ON e.entry_id = d.entry_id
+WHERE d.message_id IS NOT NULL;
+```
+
+`cct ingest` overwrites the DB from scratch on every run, so old DBs don't auto-pick-up new columns even after a `cct` upgrade — the schema gets rewritten but the rows are re-parsed from the same JSONL on disk. To pick up newly emitted JSONL fields, the entries themselves must be from after the cutover. Use this DDL-presence sanity check before using a new column at all:
+
+```sql
+SELECT COUNT(*) FROM duckdb_columns()
+WHERE table_name = 'assistant_entries' AND column_name = 'attribution_skill';
+-- 0 ⇒ DB was ingested with an older `cct`; re-run `cct ingest`.
+```
+
 ---
 
 ## Schema model
@@ -61,7 +90,7 @@ Each `entries` row has a `type` (`assistant` / `user` / `system` / `attachment` 
 | `attachment` | `attachment_entries` |
 | `progress` | `progress_entries` |
 
-Plus narrow metadata variants (`permission_mode_entries`, `last_prompt_entries`, `ai_title_entries`, `summary_entries`, `pr_link_entries`, `mode_entries`, `tag_entries`, `task_summary_entries`, `worktree_state_entries`, `forked_*`, `marble_origami_*`, …). Run `SHOW TABLES` or query `duckdb_columns()` when you need one; most analytical queries don't.
+Plus narrow metadata variants (`permission_mode_entries`, `last_prompt_entries`, `ai_title_entries`, `summary_entries`, `pr_link_entries`, `mode_entries`, `tag_entries`, `task_summary_entries`, `worktree_state_entries`, `forked_*`, `marble_origami_*`, `attribution_snapshot_entries`, `content_replacement_entries`, `file_history_snapshot_entries`, `queue_operation_entries`, …). Run `SHOW TABLES` or query `duckdb_columns()` when you need one; most analytical queries don't. The four most recent — `attribution_snapshot_entries` (per-message UI surface + file states + prompt/permission/escape counts), `content_replacement_entries` (text replacements applied to a session), `file_history_snapshot_entries` (file-state snapshots keyed by `message_id`), and `queue_operation_entries` (queue add/remove with timestamps) — are useful for UI/agent-behavior telemetry rather than cost aggregation.
 
 Note on `last_prompt_entries`: as of Claude Code's new `last-prompt` format, `last_prompt` is NULL for rows where the transcript stored only `leaf_uuid`. Filter with `WHERE last_prompt IS NOT NULL` to restrict to old-format rows. `leaf_uuid` is a *soft* reference to `entries(uuid)` and does not point at the prompt-text entry — it is the conversation-tree leaf at session-save time. Always join on **both** `uuid` and `session_id`, because `entries(uuid)` is non-unique across resumed sessions:
 
@@ -228,8 +257,25 @@ FROM attachment_invoked_skills
 GROUP BY 1 ORDER BY n DESC;
 ```
 
-### Cost attributed to a skill
-No hard attribution exists — an invocation doesn't directly tie a skill to a specific cost. A reasonable convention: all assistant turns in the same session after the skill loaded belong to it (as ceiling; double-counts when multiple skills overlap).
+### Cost attributed to a skill (post-2026-05-01)
+
+Claude Code now stamps each assistant turn with the skill active in its system block, via `assistant_entries.attribution_skill` (format: `<plugin>:<skill>` for plugin-namespaced skills, bare `<skill>` for built-ins; NULL when no skill is active). This replaces the timestamp-window heuristic for entries from the cutover onward — it's exact, per-turn, and survives concurrent skills.
+
+```sql
+SELECT attribution_skill,
+       COUNT(*)                AS turns,
+       ROUND(SUM(cost_usd), 2) AS cost_usd
+FROM assistant_entries_deduped
+WHERE attribution_skill IS NOT NULL
+GROUP BY 1 ORDER BY cost_usd DESC;
+```
+
+What this measures vs what it doesn't:
+- **Measures:** time the skill was *active* in the system block (loaded into context, available for the model to use). Each turn cleanly credited to one skill.
+- **Doesn't measure:** the cost of *loading* the skill — the `dynamic_skill` attachment that injects it, plus the `cache_bust:dynamic_skill` re-cache it triggers on the next turn. For skill-load ROI ("did pulling this skill into context pay for itself?"), see the cumulative-attribution methodology in `references/cumulative-cost-analysis.md`.
+- **Pre-cutover entries are NULL** for this column. Filter to `WHERE e.timestamp >= '2026-05-01' AND attribution_skill IS NOT NULL` for a clean denominator if you're computing percentages.
+
+For the older corpus, the post-load timestamp-window approximation still works as a ceiling — keep both interpretations in mind:
 
 ```sql
 WITH loads AS (
@@ -248,7 +294,74 @@ JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id
 GROUP BY 1 ORDER BY attributed_usd DESC;
 ```
 
-Two interpretations to be aware of: (1) invocation count is a cleaner signal of "am I using this"; (2) attributed cost is an upper bound — when two skills load at the same attachment entry (common for batch loads), they share an `entry_id` and the post-load window is credited to both.
+Two interpretations of the timestamp-window query: (1) invocation count is a cleaner signal of "am I using this"; (2) attributed cost is an upper bound — when two skills load at the same attachment entry (common for batch loads), they share an `entry_id` and the post-load window is credited to both.
+
+### Cost attributed to a subagent (post-2026-05-01)
+
+`assistant_entries.attribution_agent` (format: `<plugin>:<agent>` or bare `<agent>`) and `attribution_plugin` mark turns produced by a subagent. This is a per-turn alternative to the `transcripts.is_subagent` + `parent_session_id` join chain — useful when you want a flat per-agent breakdown without unrolling the subagent-file structure:
+
+```sql
+SELECT attribution_agent,
+       attribution_plugin,
+       COUNT(*)                AS turns,
+       ROUND(SUM(cost_usd), 2) AS cost_usd
+FROM assistant_entries_deduped
+WHERE attribution_agent IS NOT NULL
+GROUP BY 1, 2 ORDER BY cost_usd DESC;
+```
+
+When `attribution_plugin` and the `<plugin>:` prefix of `attribution_agent` disagree, the schema comment is explicit: trust `attribution_plugin`. Pre-cutover subagent transcripts have NULL here — fall back to the `is_subagent`-based recipe in [Subagent transcripts](#subagent-transcripts-separate-files) for full historical coverage.
+
+### Why did the prompt cache miss? (`cache_miss_reason_type`)
+
+When the API skips the prompt cache and rebills input tokens at the fresh-input rate, it now reports the reason on the assistant turn. `assistant_entries.cache_miss_reason_type` is the API's own ground-truth signal — values seen in the wild: `tools_changed`, `messages_changed`, `system_changed`, `params_changed`, `model_changed`, `previous_message_not_found`, `unavailable`. `cache_missed_input_tokens` is the exact token count that paid full price (NULL when reason is `previous_message_not_found` or `unavailable`).
+
+This is the highest-leverage cost-diagnostic field added by the schema update — it tells you *why* the cache thrashed, by category, in dollars:
+
+```sql
+SELECT cache_miss_reason_type,
+       COUNT(*)                                            AS turns,
+       ROUND(SUM(cache_missed_input_tokens) / 1e6, 2)      AS missed_mtok,
+       ROUND(SUM(cost_usd), 2)                             AS turn_cost_usd
+FROM assistant_entries_deduped
+WHERE message_id IS NOT NULL
+  AND cache_miss_reason_type IS NOT NULL
+GROUP BY 1 ORDER BY turn_cost_usd DESC NULLS LAST;
+```
+
+Cross-tab against the attachment-event detector in [Cache-bust events](#cache-bust-events) to attribute *which* event drove a `tools_changed` or `system_changed` miss. The two fields answer different questions — `cache_miss_reason_type` says "did this turn miss, and what kind"; the attachment-event row pair says "which payload changed".
+
+`turn_cost_usd` here is the **whole turn**, not just the miss portion — a `tools_changed` turn still does its normal output and may have other input. To isolate the miss-only dollar amount, weight `cache_missed_input_tokens` by the model's fresh-input rate (longest-prefix join — see [`references/cumulative-cost-analysis.md`](references/cumulative-cost-analysis.md)):
+
+```sql
+WITH r AS (
+  SELECT d.cache_miss_reason_type,
+         d.cache_missed_input_tokens,
+         (SELECT input_per_mtok FROM model_pricing p
+          WHERE d.model LIKE p.model || '%'
+          ORDER BY LENGTH(p.model) DESC LIMIT 1) AS rate
+  FROM assistant_entries_deduped d
+  WHERE d.cache_miss_reason_type IS NOT NULL
+    AND d.cache_missed_input_tokens IS NOT NULL)
+SELECT cache_miss_reason_type,
+       ROUND(SUM(cache_missed_input_tokens * rate / 1e6), 2) AS miss_only_usd
+FROM r GROUP BY 1 ORDER BY miss_only_usd DESC;
+```
+
+### API errors by status code
+
+`assistant_entries.api_error_status` (SMALLINT) is the HTTP status the API returned on a failed turn — paired with `is_api_error_message = true` and `error` (the message text). Common values: `429` (rate limit), `401` (auth), `400` (invalid request), `403`, `529` (overload). Useful for sniffing rate-limit pressure or mid-session auth flaps:
+
+```sql
+SELECT api_error_status,
+       COUNT(*) AS errors,
+       ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct
+FROM assistant_entries_deduped
+WHERE api_error_status IS NOT NULL
+GROUP BY 1 ORDER BY errors DESC;
+```
+
+Failed turns have `cost_usd = NULL` (never billed) so they're already excluded from cost sums — this view is purely diagnostic.
 
 ### Permission-mode usage
 ```sql
@@ -277,6 +390,11 @@ ORDER BY e.entry_id DESC LIMIT 1;
 ```
 
 Two flavors of user entry share this table: **plain-text prompts** populate `message_content_text` (tool_use_result NULL); **tool-result injections** populate `tool_use_result` (message_content_text NULL). Both count as "the preceding user turn" for cost-trace purposes — a huge tool result often explains a blown-up assistant turn more than the last human sentence. If you specifically want the last *human* prompt, filter `WHERE u.message_content_text IS NOT NULL AND NOT e.is_sidechain` and know you may skip several tool-result turns to get there.
+
+Adjacent `user_entries` columns worth knowing:
+- `is_visible_in_transcript_only = true` marks messages the model never received — they exist for UI scrollback only. Exclude from cost or content sums; otherwise you're crediting bytes that were never billed.
+- `is_compact_summary = true` is the auto-generated summary that replaces older turns at compaction. It lives in `message_content_text` and is huge — its turn pair is also a `compact_summary` cache-bust event.
+- `image_paste_ids` (JSON array) records images attached to a prompt by paste id; `plan_content` carries plan-mode text submitted with the message. Both are ~2026-05-01-onward (see the coverage caveat).
 
 ### Most expensive individual turns
 Top-N for spotting runaway single turns (huge tool-result payloads, oversized Agent prompts, cold-cache spawns):
@@ -511,6 +629,7 @@ SELECT attachment_type,
          + COALESCE(LENGTH(CAST(deferred_added_lines AS VARCHAR)), 0)
          + COALESCE(LENGTH(CAST(deferred_added_names AS VARCHAR)), 0)
          + COALESCE(LENGTH(CAST(deferred_removed_names AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(deferred_readded_names AS VARCHAR)), 0)
          + COALESCE(LENGTH(CAST(mcp_added_blocks AS VARCHAR)), 0)
          + COALESCE(LENGTH(CAST(mcp_added_names AS VARCHAR)), 0)
          + COALESCE(LENGTH(CAST(mcp_removed_names AS VARCHAR)), 0)
@@ -522,6 +641,19 @@ GROUP BY 1 ORDER BY total_chars DESC;
 ```
 
 Fields most often missed: `deferred_added_lines` (ToolSearch loaded-tool deltas, millions of chars), `mcp_added_blocks` (MCP-instructions deltas), `hook_command` / `hook_stdout` (hook event content), `file_content_text` / `directory_content` (file/dir reads via `@path` mentions or attached files). Per-type chars/tok calibration in [`references/token-calibration.md`](references/token-calibration.md).
+
+The list above is brittle — every new attachment variant adds at least one column. Before relying on the sum for cost decomposition, audit it against the live schema:
+
+```sql
+SELECT column_name, data_type
+FROM duckdb_columns()
+WHERE table_name = 'attachment_entries'
+  AND data_type IN ('VARCHAR', 'JSON')
+  AND column_name NOT IN ('attachment_type','hook_event','attribution_skill') -- categoricals
+ORDER BY 1;
+```
+
+Anything new in the result that isn't in the COALESCE sum above is dropped chars. As of 2026-05-05 the list also includes `deferred_readded_names` (added) and `plan_file_path` (path, not content — leave out of the sum; the body lives in `file_content_text` because `PlanFileReference` flattens into the file-shaped columns). New attachment types since 2026-05-01 — `auto_mode`, `auto_mode_exit`, `agent_listing_delta`, `hook_stopped_continuation`, `hook_system_message`, `todo_reminder` — currently classify-only (no dedicated content columns), so the existing payload sum already covers them via `hook_content` / `hook_stdout` where applicable. Recheck if any of those grow dedicated columns later.
 
 ### Tool-result subcat drill-down
 
@@ -564,17 +696,24 @@ Trade-offs to know about: (1) Bash compound chains like `cd /x && git status` co
 
 ### Cache-bust events
 
-A small set of events deterministically invalidate the cached prefix and force re-injection of the system block (CLAUDE.md + tool definitions + MCP schemas + Claude Code preamble — none of which appears as a JSONL `content_block`). They show up as `cc(T+1)` spikes far above the typical `user_intervening = cc(T+1) − output_tokens(T)` token count. Knowing which event fired makes the spike *interpretable* rather than noise.
+A set of events deterministically invalidate the cached prefix and force re-injection of the system block (CLAUDE.md + tool definitions + MCP schemas + Claude Code preamble — none of which appears as a JSONL `content_block`). They show up as `cc(T+1)` spikes far above the typical `user_intervening = cc(T+1) − output_tokens(T)` token count. Knowing which event fired makes the spike *interpretable* rather than noise.
 
-Five known events, in priority order (first match wins when multiple fire on the same turn):
+**Ground truth, post-2026-05-01:** `assistant_entries.cache_miss_reason_type` is the API's own report of *whether and why* a turn missed cache (see [Why did the prompt cache miss?](#why-did-the-prompt-cache-miss-cache_miss_reason_type)). Use it as the trigger ("did T miss?") and the attachment-event detector below as the attribution ("which payload changed in the user-side window before T?"). Pre-cutover entries have only the attachment-event signal — the table below is still the only available detector for that corpus.
+
+Known events, in priority order (first match wins when multiple fire on the same turn):
 
 | Event | Detected by | What changes |
 |-------|-------------|--------------|
 | `compact_summary` | `user_entries.is_compact_summary = true` | Prior turns collapsed into a summary; full re-cache. |
-| `deferred_tools_delta` | `attachment_type = 'deferred_tools_delta'` | ToolSearch loaded a deferred tool; system-block tool list grew. |
+| `deferred_tools_delta` | `attachment_type = 'deferred_tools_delta'` | ToolSearch loaded a deferred tool; system-block tool list grew. (Schema also exposes `deferred_readded_names` — tools previously dropped that came back in the same delta — useful for spotting churn.) |
+| `agent_listing_delta` | `attachment_type = 'agent_listing_delta'` | Available-agent listing payload changed (analogous to `deferred_tools_delta` but for agents). Post-2026-05-01. |
 | `mcp_instructions_delta` | `attachment_type = 'mcp_instructions_delta'` | MCP server reloaded instructions. |
 | `dynamic_skill` | `attachment_type = 'dynamic_skill'` | Plugin/skill content injected into system block. |
+| `auto_mode` / `auto_mode_exit` | `attachment_type IN ('auto_mode', 'auto_mode_exit')` | AutoMode reminder added to / removed from the system block. Post-2026-05-01. |
+| `plan_mode` / `plan_mode_exit` | `attachment_type IN ('plan_mode', 'plan_mode_exit')` | Plan-mode reminder added to / removed from the system block. |
 | `date_change` | `attachment_type = 'date_change'` | Day rolled over; `currentDate` in system block updated. |
+
+The list is empirical — there's no enumerated registry of cache-bust events in the source. New events ship with new Claude Code versions; treat unexplained `cache_miss_reason_type = system_changed` / `tools_changed` spikes that this list doesn't account for as evidence of an unmodelled event and check `attachment_type` distinct values around the spike.
 
 Detection per turn pair — find which events fired in the user-side window between the previous and current assistant turn:
 
@@ -613,6 +752,8 @@ The cost of an event on a turn pair is `cc(T+1) − prev_out_tok − Σ chars-ev
 `model_pricing.model` is a short name (e.g. `claude-haiku-4-5`) but `assistant_entries.model` is often a dated revision (`claude-haiku-4-5-20251001`). A naive `JOIN ON d.model = p.model` silently drops every revisioned row. Prefix-match instead — but be aware of the dup trap below.
 
 > **Footgun.** A simple `LIKE p.model || '%'` join matches *multiple* pricing rows when the family has both versioned and unversioned entries (`claude-haiku-4-5-20251001` matches `claude-haiku` *and* `claude-haiku-4-5`). Every cost computed downstream gets inflated 2-3× and still looks plausible. For any non-trivial cost analysis use a longest-prefix match and a recompute-vs-`SUM(cost_usd)` sanity check — see [`references/cumulative-cost-analysis.md`](references/cumulative-cost-analysis.md) for the safe pattern.
+
+The query below is safe specifically because both branches of the delta cancel the row-fan-out: actual `SUM(cost_usd)` and the recomputed "no cache" total are both N-times-counted by the multi-match bug, so the *ratio* is correct even when the *absolute totals* are inflated. **Do not copy this LIKE-join into a query that reports absolute dollars** — it will read 2-3× high. For absolute numbers always use the longest-prefix correlated-subquery pattern from `cumulative-cost-analysis.md` — that is what the cache-creation 5m-vs-1h split query later in this section uses.
 
 ```sql
 -- Actual vs "no caching ever existed": apply fresh-input rate to all three input buckets;
@@ -764,7 +905,16 @@ Branches:
 - **`./transcripts.duckdb` or another `*.duckdb` exists** → ask the user whether it's the transcripts DB before querying.
 - **No `*.duckdb` found** → ask where the DB lives, or whether to generate one now with `cct ingest`. Don't silently run `cct ingest` — it scans `~/.claude/projects/` and writes a multi-GB file to `~/.local/share/cct/transcripts.duckdb`.
 
-Once confirmed, use the same path in every `duckdb <path>` invocation. `cct ingest` **overwrites** the DB from scratch on every run — it is not incremental.
+Once confirmed, use the same path in every `duckdb <path>` invocation. `cct ingest` **overwrites** the DB from scratch on every run — it is not incremental. After upgrading `cct` (new columns or new attachment variants), re-run `cct ingest` so the schema and parsed columns match — querying an old DB with a new SKILL.md will return "Binder Error: column not found" on the new fields. Quick check that picks up most schema-update misses:
+
+```sql
+SELECT
+  (SELECT COUNT(*) FROM duckdb_columns()
+   WHERE table_name = 'assistant_entries' AND column_name = 'attribution_skill') AS has_attribution,
+  (SELECT COUNT(*) FROM duckdb_columns()
+   WHERE table_name = 'assistant_entries' AND column_name = 'cache_miss_reason_type') AS has_cache_miss;
+-- both 1 ⇒ DB is at the 2026-05-05 schema or later.
+```
 
 ---
 
