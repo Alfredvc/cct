@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 use tokio::task::spawn_blocking;
 
 use crate::cli::ServeArgs;
+use crate::cost_decomp::{self, DecompResult};
 
 // ── Static web bundle (built by Vite, embedded at compile time) ───────────────
 
@@ -43,6 +44,7 @@ struct AppState {
     db: Arc<Mutex<Connection>>,
     summary: Arc<RwLock<Arc<SessionSummary>>>,
     transcript_cache: Arc<Mutex<LruCache<TranscriptKey, Bytes>>>,
+    decomp: Arc<RwLock<Option<Arc<DecompResult>>>>,
 }
 
 struct SessionSummary {
@@ -3221,11 +3223,31 @@ async fn api_dashboard_mcp_tools(
     }
 }
 
+async fn api_dashboard_cost_decomposition(State(state): State<AppState>) -> Response {
+    let cached = state.decomp.read().ok().and_then(|g| g.clone());
+    match cached {
+        Some(r) => Json(json!({
+            "tree":               r.tree,
+            "total_billed_usd":   r.total_billed_usd,
+            "total_attributed_usd": r.total_attributed_usd,
+            "days":               r.days,
+            "computed_at":        r.computed_at_iso,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cost decomposition not yet computed (recheck in a few seconds)",
+        )
+            .into_response(),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
     let db_path = args.db.to_string_lossy().into_owned();
     let port = args.port;
+    let decomp_days = args.decomp_days;
 
     // Open a single shared DuckDB connection. All session-list / transcript
     // handlers serialize access through Arc<Mutex<Connection>>; dashboard
@@ -3260,11 +3282,40 @@ pub async fn run(args: ServeArgs) {
         NonZeroUsize::new(TRANSCRIPT_CACHE_CAP).expect("cap > 0"),
     )));
 
+    // Compute the cost-decomposition flamegraph synchronously at startup. This
+    // takes seconds to a minute on a typical DB; it runs against a fresh
+    // read-only connection (no contention with the shared one).
+    let decomp: Arc<RwLock<Option<Arc<DecompResult>>>> = Arc::new(RwLock::new(None));
+    {
+        let path = db_path.clone();
+        let started = std::time::Instant::now();
+        match spawn_blocking(move || cost_decomp::compute(&path, decomp_days))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r)
+        {
+            Ok(r) => {
+                println!(
+                    "decomposition: ${:.2} attributed of ${:.2} billed over {}d ({:?})",
+                    r.total_attributed_usd,
+                    r.total_billed_usd,
+                    r.days,
+                    started.elapsed(),
+                );
+                if let Ok(mut g) = decomp.write() {
+                    *g = Some(Arc::new(r));
+                }
+            }
+            Err(e) => eprintln!("initial decomposition: {e}"),
+        }
+    }
+
     let state = AppState {
         db_path: db_path.clone(),
         db: db.clone(),
         summary: summary.clone(),
         transcript_cache: transcript_cache.clone(),
+        decomp: decomp.clone(),
     };
 
     // Background task: poll DB file mtime. On change, reopen the shared
@@ -3313,6 +3364,49 @@ pub async fn run(args: ServeArgs) {
                     }
                     Ok(Err(e)) => eprintln!("refresh: {e}"),
                     Err(e) => eprintln!("refresh task: {e}"),
+                }
+            }
+        });
+    }
+
+    // Independent refresh task for the cost-decomposition flamegraph. Polls the
+    // same mtime; does its work on a fresh read-only connection so it doesn't
+    // block other handlers. Runs after the summary rebuild so first-paint of
+    // dashboard pages stays cheap.
+    {
+        let poll_path = db_path.clone();
+        let poll_decomp = decomp.clone();
+        tokio::spawn(async move {
+            let mut last_mtime: Option<SystemTime> = std::fs::metadata(&poll_path)
+                .ok()
+                .and_then(|m| m.modified().ok());
+            loop {
+                tokio::time::sleep(Duration::from_secs(REFRESH_POLL_SECS)).await;
+                let mtime = match std::fs::metadata(&poll_path).and_then(|m| m.modified()) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if last_mtime == Some(mtime) {
+                    continue;
+                }
+                last_mtime = Some(mtime);
+
+                let path = poll_path.clone();
+                let result = spawn_blocking(move || cost_decomp::compute(&path, decomp_days))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r);
+                match result {
+                    Ok(r) => {
+                        eprintln!(
+                            "decomposition refreshed: ${:.2} attributed of ${:.2} billed",
+                            r.total_attributed_usd, r.total_billed_usd
+                        );
+                        if let Ok(mut g) = poll_decomp.write() {
+                            *g = Some(Arc::new(r));
+                        }
+                    }
+                    Err(e) => eprintln!("decomposition refresh: {e}"),
                 }
             }
         });
@@ -3372,6 +3466,10 @@ pub async fn run(args: ServeArgs) {
         .route("/api/dashboard/read-sizes", get(api_dashboard_read_sizes))
         .route("/api/dashboard/bash", get(api_dashboard_bash))
         .route("/api/dashboard/skills", get(api_dashboard_skills))
+        .route(
+            "/api/dashboard/cost-decomposition",
+            get(api_dashboard_cost_decomposition),
+        )
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");

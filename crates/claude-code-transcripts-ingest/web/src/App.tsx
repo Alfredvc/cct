@@ -8,6 +8,7 @@ import {
 } from "react-router-dom";
 import { Layout } from "./routes/Layout";
 import { DashboardPage } from "./routes/DashboardPage";
+import { FlamegraphPage } from "./routes/FlamegraphPage";
 import { SessionListPage } from "./routes/SessionListPage";
 import { TranscriptPage } from "./routes/TranscriptPage";
 import "./routes/SessionListPage.css";
@@ -25,6 +26,7 @@ export function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/cost" element={<FlamegraphPage />} />
           <Route path="/sessions" element={<SessionListPage />} />
           <Route path="/sessions/:id" element={<TranscriptPage />} />
           <Route path="/transcripts" element={<Navigate to="/sessions" replace />} />

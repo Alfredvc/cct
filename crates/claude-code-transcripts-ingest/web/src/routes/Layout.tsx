@@ -19,6 +19,12 @@ export function Layout() {
             Dashboard
           </NavLink>
           <NavLink
+            to="/cost"
+            className={({ isActive }) => `tab-btn ${isActive ? "active" : ""}`}
+          >
+            Cost
+          </NavLink>
+          <NavLink
             to="/sessions"
             className={({ isActive }) => `tab-btn ${isActive ? "active" : ""}`}
           >

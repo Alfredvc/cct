@@ -78,6 +78,11 @@ pub struct ServeArgs {
     /// Port to listen on.
     #[arg(long = "port", default_value_t = 8766)]
     pub port: u16,
+
+    /// Window (days) for the cost-decomposition flamegraph. Computed at startup
+    /// and refreshed when the DB mtime changes.
+    #[arg(long = "decomp-days", default_value_t = 30)]
+    pub decomp_days: i32,
 }
 
 #[derive(Parser, Debug)]

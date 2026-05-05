@@ -461,6 +461,153 @@ Turn-by-turn thread traversal that survives compaction: follow `logical_parent_u
 
 ---
 
+## Cost decomposition
+
+When you need to attribute every billed dollar to a source category — `tool_result:Bash`, `attachment:hook_success`, `asst_thinking`, `system_block_first_turn`, `cache_bust:compact_summary` — the full methodology and reference SQL live in [`references/cost-decomposition-methodology.md`](references/cost-decomposition-methodology.md) (built on top of [`references/cumulative-cost-analysis.md`](references/cumulative-cost-analysis.md) and [`references/token-calibration.md`](references/token-calibration.md)). The implementation is [`scripts/decompose_cost.py`](scripts/decompose_cost.py); [`scripts/flamegraph.py`](scripts/flamegraph.py) renders it as an interactive d3 flamegraph. The patterns below are the building blocks every cost-attribution query needs.
+
+### User text storage is bimodal
+
+Plain-text user content is split across **two disjoint locations** — UNION both, or you'll silently undercount user-text contribution:
+
+- `user_content_blocks.text` — text blocks within structured user messages (mixed text + tool_result entries; ~12M chars in a typical 30d window)
+- `user_entries.message_content_text` — plain-text prompts AND compact summaries (`is_compact_summary = true`; ~25M chars)
+
+Verified zero overlap. Older queries that hit only the first source missed ~67% of user text. Compact summaries hide in `message_content_text` and are huge — entire prior sessions collapsed into a single message, which trigger the `compact_summary` cache-bust event below.
+
+```sql
+-- Total user text across both sources
+SELECT SUM(chars) AS total_user_chars
+FROM (
+  SELECT LENGTH(text) AS chars
+  FROM user_content_blocks
+  WHERE block_type = 'text' AND text IS NOT NULL
+  UNION ALL
+  SELECT LENGTH(message_content_text)
+  FROM user_entries
+  WHERE message_content_text IS NOT NULL
+);
+```
+
+### Attachment payload spans many fields
+
+`attachment_entries` is wide. The actual injected text spreads across **12+ nullable columns**, varying by `attachment_type`. Naive `LENGTH(hook_content)` misses ~50% of attachment cost. For total chars per row, sum every populated content field:
+
+```sql
+SELECT attachment_type,
+       COUNT(*) AS n,
+       SUM(
+           COALESCE(LENGTH(hook_content), 0)
+         + COALESCE(LENGTH(hook_stdout), 0)
+         + COALESCE(LENGTH(hook_stderr), 0)
+         + COALESCE(LENGTH(hook_command), 0)
+         + COALESCE(LENGTH(file_content_text), 0)
+         + COALESCE(LENGTH(directory_content), 0)
+         + COALESCE(LENGTH(skill_listing_content), 0)
+         + COALESCE(LENGTH(CAST(task_reminder_content AS VARCHAR)), 0)
+         + COALESCE(LENGTH(nested_memory_content), 0)
+         + COALESCE(LENGTH(queued_command_prompt), 0)
+         + COALESCE(LENGTH(CAST(diagnostics_files AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(invoked_skills AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(deferred_added_lines AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(deferred_added_names AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(deferred_removed_names AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(mcp_added_blocks AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(mcp_added_names AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(mcp_removed_names AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(command_allowed_tools AS VARCHAR)), 0)
+         + COALESCE(LENGTH(CAST(skill_names AS VARCHAR)), 0)
+       ) AS total_chars
+FROM attachment_entries
+GROUP BY 1 ORDER BY total_chars DESC;
+```
+
+Fields most often missed: `deferred_added_lines` (ToolSearch loaded-tool deltas, millions of chars), `mcp_added_blocks` (MCP-instructions deltas), `hook_command` / `hook_stdout` (hook event content), `file_content_text` / `directory_content` (file/dir reads via `@path` mentions or attached files). Per-type chars/tok calibration in [`references/token-calibration.md`](references/token-calibration.md).
+
+### Tool-result subcat drill-down
+
+To answer "which Bash command", "which file extension", "which subagent type" rather than just "Bash" or "Read":
+
+```sql
+SELECT t.name AS tool,
+       COALESCE(
+         CASE
+           WHEN t.name = 'Bash' AND t.input_command IS NOT NULL
+             -- strip leading whitespace; strip leading FOO=val env-var assignments;
+             -- take first non-whitespace token; drop directory prefix; cap length.
+             THEN SUBSTR(
+                    REGEXP_REPLACE(
+                      REGEXP_EXTRACT(
+                        REGEXP_REPLACE(
+                          REGEXP_REPLACE(t.input_command, '^\s+', ''),
+                          '^([A-Za-z_][A-Za-z0-9_]*=\S*\s+)+', ''),
+                        '^\S+', 0),
+                      '^.*/', ''),
+                    1, 40)
+           WHEN t.name IN ('Read','Edit','Write','NotebookEdit')
+                AND t.file_ext IS NOT NULL
+             -- file_ext extracts everything after the first dot, so dotfile paths
+             -- like `.git/hooks/pre-commit` come back with slashes; trim.
+             THEN SUBSTR(REGEXP_REPLACE(t.file_ext, '^.*/', ''), 1, 30)
+           WHEN t.name = 'Agent'
+             THEN JSON_EXTRACT_STRING(t.input, '$.subagent_type')
+           WHEN t.name = 'WebFetch'
+             THEN REGEXP_EXTRACT(JSON_EXTRACT_STRING(t.input, '$.url'), '://([^/]+)', 1)
+           ELSE NULL
+         END,
+         '') AS subcat,
+       COUNT(*) AS n
+FROM tool_uses t
+GROUP BY 1, 2 ORDER BY n DESC LIMIT 30;
+```
+
+Trade-offs to know about: (1) Bash compound chains like `cd /x && git status` collapse to `cd` — first-token only is a deliberate choice for flamegraph clarity over completeness; layer a "skip leading `cd` / `source`" pass if it pollutes results. (2) Use `''` (empty string) as the default, not `NULL`, so PARTITION BY / USING joins downstream don't drop rows under SQL NULL semantics. (3) `mcp__*` tool names are already specific — leave subcat empty.
+
+### Cache-bust events
+
+A small set of events deterministically invalidate the cached prefix and force re-injection of the system block (CLAUDE.md + tool definitions + MCP schemas + Claude Code preamble — none of which appears as a JSONL `content_block`). They show up as `cc(T+1)` spikes far above the typical `user_intervening = cc(T+1) − output_tokens(T)` token count. Knowing which event fired makes the spike *interpretable* rather than noise.
+
+Five known events, in priority order (first match wins when multiple fire on the same turn):
+
+| Event | Detected by | What changes |
+|-------|-------------|--------------|
+| `compact_summary` | `user_entries.is_compact_summary = true` | Prior turns collapsed into a summary; full re-cache. |
+| `deferred_tools_delta` | `attachment_type = 'deferred_tools_delta'` | ToolSearch loaded a deferred tool; system-block tool list grew. |
+| `mcp_instructions_delta` | `attachment_type = 'mcp_instructions_delta'` | MCP server reloaded instructions. |
+| `dynamic_skill` | `attachment_type = 'dynamic_skill'` | Plugin/skill content injected into system block. |
+| `date_change` | `attachment_type = 'date_change'` | Day rolled over; `currentDate` in system block updated. |
+
+Detection per turn pair — find which events fired in the user-side window between the previous and current assistant turn:
+
+```sql
+WITH turn_pairs AS (
+  SELECT e.file_path, e.entry_id AS aT_eid,
+         LAG(e.entry_id) OVER (PARTITION BY e.file_path ORDER BY e.entry_id) AS prev_eid
+  FROM entries e
+  JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id
+  WHERE d.model != '<synthetic>')
+SELECT tp.file_path, tp.aT_eid,
+       BOOL_OR(uet.is_compact_summary)                          AS has_compact,
+       BOOL_OR(att.attachment_type = 'deferred_tools_delta')    AS has_dtd,
+       BOOL_OR(att.attachment_type = 'mcp_instructions_delta')  AS has_mcp_delta,
+       BOOL_OR(att.attachment_type = 'dynamic_skill')           AS has_dyn_skill,
+       BOOL_OR(att.attachment_type = 'date_change')             AS has_date_change
+FROM turn_pairs tp
+LEFT JOIN entries ue ON ue.file_path = tp.file_path
+                    AND ue.entry_id BETWEEN tp.prev_eid + 1 AND tp.aT_eid - 1
+                    AND ue.type = 'user'
+LEFT JOIN user_entries uet ON uet.entry_id = ue.entry_id
+LEFT JOIN entries ae ON ae.file_path = tp.file_path
+                    AND ae.entry_id BETWEEN tp.prev_eid + 1 AND tp.aT_eid - 1
+                    AND ae.type = 'attachment'
+LEFT JOIN attachment_entries att ON att.entry_id = ae.entry_id
+WHERE tp.prev_eid IS NOT NULL
+GROUP BY 1, 2;
+```
+
+The cost of an event on a turn pair is `cc(T+1) − prev_out_tok − Σ chars-evidence`: the system-block re-injection minus what visible content blocks account for. The decomposition pipeline rolls these into a `cache_bust:<event>` category — see [`references/cost-decomposition-methodology.md`](references/cost-decomposition-methodology.md) for the two-regime attribution that handles event vs non-event turns differently.
+
+---
+
 ## Joining against `model_pricing`
 
 `model_pricing.model` is a short name (e.g. `claude-haiku-4-5`) but `assistant_entries.model` is often a dated revision (`claude-haiku-4-5-20251001`). A naive `JOIN ON d.model = p.model` silently drops every revisioned row. Prefix-match instead — but be aware of the dup trap below.
@@ -492,6 +639,30 @@ GROUP BY 1 ORDER BY actual_usd DESC NULLS LAST;
 Models absent from `model_pricing` (e.g. older revisions not loaded) show `NULL` on the `no_cache_usd` side. The ingester may also have skipped pricing them, in which case `actual_usd` is NULL too — surface those rows explicitly rather than silently dropping them.
 
 `model_pricing` has two cache-creation rate columns: `cache_creation_5m_per_mtok` (default, cheaper) and `cache_creation_1h_per_mtok` (opt-in, longer TTL, pricier). If you want the actual cache-creation cost broken out, bill `cache_creation_5m` tokens at the 5m rate and `cache_creation_1h` tokens at the 1h rate — they're disjoint sub-buckets of `cache_creation_input_tokens`.
+
+```sql
+-- Cache-creation cost split: 5m vs 1h
+WITH model_rates AS (
+  SELECT m AS asst_model,
+         (SELECT cache_creation_5m_per_mtok FROM model_pricing p
+          WHERE m LIKE p.model || '%' ORDER BY LENGTH(p.model) DESC LIMIT 1) AS cc5m_rate,
+         (SELECT cache_creation_1h_per_mtok FROM model_pricing p
+          WHERE m LIKE p.model || '%' ORDER BY LENGTH(p.model) DESC LIMIT 1) AS cc1h_rate
+  FROM (SELECT DISTINCT model AS m FROM assistant_entries_deduped
+        WHERE model IS NOT NULL AND model != '<synthetic>'))
+SELECT d.model,
+       SUM(d.cache_creation_5m)                                       AS tok_5m,
+       SUM(d.cache_creation_1h)                                       AS tok_1h,
+       ROUND(SUM(d.cache_creation_5m * mr.cc5m_rate / 1e6), 2)        AS cc5m_usd,
+       ROUND(SUM(d.cache_creation_1h * mr.cc1h_rate / 1e6), 2)        AS cc1h_usd,
+       ROUND(SUM((d.cache_creation_5m * mr.cc5m_rate
+                + d.cache_creation_1h * mr.cc1h_rate) / 1e6), 2)      AS cc_usd
+FROM assistant_entries_deduped d
+JOIN model_rates mr ON mr.asst_model = d.model
+GROUP BY 1 ORDER BY cc_usd DESC NULLS LAST;
+```
+
+The 1h rate is roughly 2× the 5m rate (model-dependent), so a session that opts into 1h cache to amortize over many turns can shift the cc breakdown materially. Rolling cc into a single rate hides this.
 
 ---
 
@@ -663,3 +834,5 @@ Deeper methodology that doesn't belong in the main flow lives in `references/`. 
 | File | Read when |
 |------|-----------|
 | [`references/cumulative-cost-analysis.md`](references/cumulative-cost-analysis.md) | The user asks "how much does X cost me cumulatively?" or "what would I save if I trimmed/compacted Y?" — anything where the cost of a thing injected into context (tool result, file read, hook output, system-prompt section, skill body) needs to be summed across all subsequent turns that re-read the prefix. Covers the pricing-JOIN footgun, longest-prefix rate match, the cumulative-attribution SQL pattern, hook ROI math, and the recompute-vs-`SUM(cost_usd)` sanity check that catches silent 2-3× errors. |
+| [`references/token-calibration.md`](references/token-calibration.md) | The user asks how to convert chars to tokens for a category, or wants to understand why naive `chars / 4` is wrong. Empirical chars-per-token and per-block-overhead per category (Bash, Read, Grep, Glob, WebFetch, attachments, asst text/tool_use). Recalibration SQL via `REGR_*` for when a new tool dominates usage. |
+| [`references/cost-decomposition-methodology.md`](references/cost-decomposition-methodology.md) | The user asks "where is my money going?" by category — `tool_result:Bash`, `attachment:hook_success`, `asst_thinking`, `system_block_first_turn`, `cache_bust:compact_summary`. Documents the billing-exact split by chars-share, the two-regime methodology (event vs non-event turns), the five known cache-bust events, the subcat extraction patterns, and the full pipeline stages from `scripts/decompose_cost.py`. Builds on the two references above. |
