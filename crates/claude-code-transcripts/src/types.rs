@@ -372,6 +372,17 @@ pub struct AssistantMessage {
         with = "opt_nullable"
     )]
     pub context_management: Option<Option<Value>>,
+
+    /// API-emitted cache-miss diagnostic. `null` on most turns; an object
+    /// when the API reports why prompt caching did not hit. Outer
+    /// `None` = field absent, `Some(None)` = JSON null, `Some(Some(d))`
+    /// = populated.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_nullable"
+    )]
+    pub diagnostics: Option<Option<AssistantDiagnostics>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1504,6 +1515,41 @@ mod tests {
         let v: AssistantDiagnostics = serde_json::from_str(json).unwrap();
         let cmr = v.cache_miss_reason.as_ref().expect("cache_miss_reason set");
         assert_eq!(cmr.kind, "future_reason_not_yet_seen");
+    }
+
+    /// AssistantMessage with `diagnostics` populated round-trips both
+    /// keys (cache_miss_reason + cache_missed_input_tokens) intact.
+    #[test]
+    fn assistant_message_with_diagnostics_round_trip() {
+        let json = r#"{"id":"msg_dx","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1},"diagnostics":{"cache_miss_reason":{"type":"system_changed","cache_missed_input_tokens":33656}}}"#;
+        let v: AssistantMessage = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+        assert_eq!(back, json);
+    }
+
+    /// `diagnostics: null` (field present, value JSON null) must round-trip
+    /// as null — not be dropped. Most assistant turns in the wild have this shape.
+    #[test]
+    fn assistant_message_with_null_diagnostics_round_trips_as_null() {
+        let json = r#"{"id":"msg_dn","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1},"diagnostics":null}"#;
+        let v: AssistantMessage = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+        assert_eq!(back, json);
+    }
+
+    /// `diagnostics` absent must deserialize cleanly and not re-emit the key.
+    /// All older transcripts (pre-2026-05-05 shape change) lack the field
+    /// entirely, so this is the largest population in the wild.
+    #[test]
+    fn assistant_message_without_diagnostics_omits_field() {
+        let json = r#"{"id":"msg_da","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let v: AssistantMessage = serde_json::from_str(json).unwrap();
+        assert!(
+            v.diagnostics.is_none(),
+            "outer Option should be None when key absent"
+        );
+        let back = serde_json::to_string(&v).unwrap();
+        assert_eq!(back, json, "absent field must not re-emit as null");
     }
 }
 
