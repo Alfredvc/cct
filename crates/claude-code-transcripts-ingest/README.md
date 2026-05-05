@@ -6,7 +6,8 @@
 CLI that ingests every Claude Code transcript under `~/.claude/projects` into a
 DuckDB database, with a normalised schema suited for usage / cost analysis across
 sessions, subagents, tool calls, and cache tokens. Ships with an embedded viewer
-served over HTTP.
+served over HTTP, plus `cct report usage` for cost breakdowns and
+`cct extract sessions` for structured per-turn JSON dumps.
 
 Installs the `cct` binary.
 
@@ -24,6 +25,8 @@ self-contained but takes a minute or two the first time.
 ```sh
 cct ingest                # scans ~/.claude/projects → ~/.local/share/cct/transcripts.duckdb
 cct serve                 # viewer at http://localhost:8766
+cct report usage          # token + cost breakdown by model (text or --json)
+cct extract sessions      # structured per-turn JSON dump for downstream tooling
 ```
 
 ## Commands
@@ -97,6 +100,12 @@ A multi-panel cost dashboard split into two sub-tabs. Switch between them with t
 - Session Distribution (by turn count)
 
 ![cct serve dashboard](https://raw.githubusercontent.com/alfredvc/cct/main/docs/assets/dashboard.png)
+
+#### Cost (`/cost`)
+
+Cumulative spend split by what's actually being billed: tool result reads, cached assistant output, system prompt, user messages, file attachments. Identifies which content category dominates your bill.
+
+![cct serve cost](https://raw.githubusercontent.com/alfredvc/cct/main/docs/assets/cost.png)
 
 ### `cct report usage`
 
