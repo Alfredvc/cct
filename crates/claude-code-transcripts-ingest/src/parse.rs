@@ -1090,6 +1090,7 @@ fn build_attachment(
         CommandPermissions { .. } => "command_permissions",
         PlanMode { .. } => "plan_mode",
         PlanModeExit { .. } => "plan_mode_exit",
+        PlanFileReference { .. } => "plan_file_reference",
         AutoMode { .. } => "auto_mode",
         AutoModeExit => "auto_mode_exit",
         SkillListing { .. } => "skill_listing",
@@ -1313,7 +1314,7 @@ fn build_attachment(
             // /showConcurrencyNote) are not flattened into dedicated columns —
             // the agent listing payload is verbose and out of scope here.
         }
-        AutoMode { .. } | AutoModeExit => {
+        AutoMode { .. } | AutoModeExit | PlanFileReference { .. } => {
             // Classify-only: attachment_type captures the variant.
         }
         McpInstructionsDelta {

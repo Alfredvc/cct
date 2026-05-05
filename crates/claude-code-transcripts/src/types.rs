@@ -808,6 +808,16 @@ pub enum AttachmentData {
 
     AutoModeExit,
 
+    // ── Plan file reference ─────────────────────────────────────────────
+    /// Snapshot of a plan markdown file pinned to the conversation. Carries
+    /// the absolute path and the full file content at pin time.
+    PlanFileReference {
+        #[serde(rename = "planFilePath")]
+        plan_file_path: String,
+        #[serde(rename = "planContent")]
+        plan_content: String,
+    },
+
     // ── Skills ───────────────────────────────────────────────────────────
     SkillListing {
         content: String,
@@ -1644,6 +1654,18 @@ mod tests {
         let v: Entry = serde_json::from_str(json).unwrap();
         let back = serde_json::to_string(&v).unwrap();
 
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
+    }
+
+    /// `plan_file_reference` attachment round-trips with planFilePath
+    /// and planContent.
+    #[test]
+    fn attachment_plan_file_reference_round_trips() {
+        let json = r##"{"uuid":"a8","parentUuid":null,"isSidechain":false,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"attachment","attachment":{"type":"plan_file_reference","planFilePath":"/tmp/plan.md","planContent":"# Plan body"}}"##;
+        let v: Entry = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
         let original: serde_json::Value = serde_json::from_str(json).unwrap();
         let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
         assert_eq!(roundtripped, original);
