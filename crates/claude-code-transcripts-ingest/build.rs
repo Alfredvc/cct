@@ -82,6 +82,18 @@ fn sync_web_src(src: &Path, dst: &Path) {
             continue;
         }
         let dst_path = dst.join(&name);
+        // Mirror deletes from src by removing dst_path before copying; without
+        // this, files renamed or deleted in src linger in OUT_DIR and break
+        // tsc / vite (e.g. an old import that points at a now-removed module).
+        if dst_path.exists() {
+            if dst_path.is_dir() {
+                std::fs::remove_dir_all(&dst_path)
+                    .unwrap_or_else(|e| panic!("remove {dst_path:?}: {e}"));
+            } else {
+                std::fs::remove_file(&dst_path)
+                    .unwrap_or_else(|e| panic!("remove {dst_path:?}: {e}"));
+            }
+        }
         if entry.file_type().unwrap().is_dir() {
             copy_dir_all(&entry.path(), &dst_path)
                 .unwrap_or_else(|e| panic!("copy dir {:?}: {e}", entry.path()));
