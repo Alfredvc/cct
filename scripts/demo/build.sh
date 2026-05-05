@@ -189,6 +189,7 @@ SELECT
   NULL::JSON                        AS context_management,
   ae.request_id,
   ae.is_api_error_message,
+  ae.api_error_status,
   fakepara(ae.error)                AS error,
   ae.tool_use_count,
   ae.cost_usd,
@@ -203,7 +204,13 @@ SELECT
   NULL::JSON                        AS service_tier,
   NULL::JSON                        AS inference_geo,
   NULL::JSON                        AS iterations,
-  NULL::JSON                        AS speed
+  NULL::JSON                        AS speed,
+  CASE WHEN ae.attribution_agent  IS NULL THEN NULL ELSE 'demo-agent'  END AS attribution_agent,
+  CASE WHEN ae.attribution_plugin IS NULL THEN NULL ELSE 'demo-plugin' END AS attribution_plugin,
+  CASE WHEN ae.attribution_skill  IS NULL THEN NULL ELSE 'demo-skill'  END AS attribution_skill,
+  ae.cache_miss_reason_type,
+  ae.cache_missed_input_tokens,
+  ae.cost_per_tool_use
 FROM src.assistant_entries ae
 WHERE ae.entry_id IN (SELECT entry_id FROM keep_entries);
 
@@ -286,7 +293,12 @@ SELECT
   NULL::JSON                        AS mcp_removed_names,
   ae.ultrathink_level,
   fakepara(ae.queued_command_prompt) AS queued_command_prompt,
-  ae.queued_command_mode
+  ae.queued_command_mode,
+  fakepath(ae.nested_memory_path)        AS nested_memory_path,
+  ae.nested_memory_memory_type,
+  fakepara(ae.nested_memory_content)     AS nested_memory_content,
+  ae.nested_memory_differs_from_disk,
+  NULL::JSON                             AS deferred_readded_names
 FROM src.attachment_entries ae
 WHERE ae.entry_id IN (SELECT entry_id FROM keep_entries);
 
