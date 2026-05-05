@@ -1,8 +1,8 @@
 //! Cost decomposition pipeline.
 //!
-//! Port of `skills/claude-usage-db/scripts/decompose_cost.py` and
+//! Port of `skills/cct-db/scripts/decompose_cost.py` and
 //! `flamegraph.py`. Methodology and per-stage rationale documented in
-//! `skills/claude-usage-db/references/cost-decomposition-methodology.md`.
+//! `skills/cct-db/references/cost-decomposition-methodology.md`.
 //!
 //! Attributes every billed dollar over a `--days` window to a hierarchical
 //! category tree: bucket → category → subcat → stream → scope. Output is a d3

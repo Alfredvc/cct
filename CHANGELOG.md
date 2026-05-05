@@ -16,7 +16,7 @@ All notable changes to this project will be documented in this file.
 ### 🚜 Refactor
 
 - *(skills)* Rewrite optimize-usage with hypothesis-first methodology
-- *(skills)* Rewrite claude-usage-db with progressive disclosure
+- *(skills)* Rewrite cct-db with progressive disclosure
 
 ### 📚 Documentation
 

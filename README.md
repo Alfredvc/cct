@@ -56,16 +56,16 @@ Then ask Claude anything about your usage:
 - "Show me the 10 most expensive turns and what they were doing."
 - "How much is the `frontend-design` skill costing me per invocation?"
 
-Claude picks up the schema from the `claude-usage-db` skill and runs SQL against your local DB.
+Claude picks up the schema from the `cct-db` skill and runs SQL against your local DB.
 
 ## Skills
 
 Skills are investigation playbooks. They give Claude the schema, recipes, and methodology to answer specific classes of question. Mix and match — or write your own.
 
-- **`claude-usage-db`** — the foundation. DB schema, common SQL recipes, and guidance for querying transcripts efficiently. Every other skill builds on this.
+- **`cct-db`** — the foundation. DB schema, common SQL recipes, and guidance for querying transcripts efficiently. Every other skill builds on this.
 - **`optimize-usage`** — diagnose Claude Code spend and return a dollar-ranked optimization report. Multi-phase: measure spend categories, inspect raw high-cost turns, disconfirm shallow leads, rank concrete fixes.
 
-Want to investigate something else — tool latency, prompt patterns, error rates, skill ROI? Build a skill on top of `claude-usage-db`. The DB has the data; you write the playbook.
+Want to investigate something else — tool latency, prompt patterns, error rates, skill ROI? Build a skill on top of `cct-db`. The DB has the data; you write the playbook.
 
 ## Tip
 If you have a hypothesis about what's driving your usage, just ask Claude. It's good at testing hypotheses with `cct`.

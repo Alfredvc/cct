@@ -1,6 +1,6 @@
 # Probe catalog
 
-Every probe assumes the billing-safe dedup rule: use `assistant_entries_deduped` and filter `message_id IS NOT NULL` for cost aggregates. See `claude-usage-db` for schema details.
+Every probe assumes the billing-safe dedup rule: use `assistant_entries_deduped` and filter `message_id IS NOT NULL` for cost aggregates. See `cct-db` for schema details.
 
 Before running any probe, fill in the pre-registration block from Phase 2:
 
@@ -313,7 +313,7 @@ Rows with `explicit_model IS NULL` inherit the parent's current `/model`. That p
 
 ```sql
 -- Join Agent call → spawned session (via user_id linkage in transcripts) → first assistant_entry.model
--- Schema-dependent; see claude-usage-db for the exact join keys.
+-- Schema-dependent; see cct-db for the exact join keys.
 ```
 
 ---

@@ -1,6 +1,6 @@
 ---
 name: optimize-usage
-description: Investigate a user's Claude Code setup to find ROOT causes of spend and recommend cost optimizations. Use whenever the user asks to "reduce my Claude cost", "why is Claude so expensive", "optimize my usage", "analyze my spend", "audit my setup", "what's driving my bill", "cost insights", or any variant of diagnosing their Claude Code habits and configuration. This is a diagnostic methodology skill — it sits on top of `claude-usage-db` (which covers raw SQL) and guides the investigation itself so the agent doesn't declare victory on shallow findings. Trigger even if the user only mentions part of this (e.g. "my Opus bill is high" or "are my skills expensive?") — partial cost questions still need the full root-cause discipline.
+description: Investigate a user's Claude Code setup to find ROOT causes of spend and recommend cost optimizations. Use whenever the user asks to "reduce my Claude cost", "why is Claude so expensive", "optimize my usage", "analyze my spend", "audit my setup", "what's driving my bill", "cost insights", or any variant of diagnosing their Claude Code habits and configuration. This is a diagnostic methodology skill — it sits on top of `cct-db` (which covers raw SQL) and guides the investigation itself so the agent doesn't declare victory on shallow findings. Trigger even if the user only mentions part of this (e.g. "my Opus bill is high" or "are my skills expensive?") — partial cost questions still need the full root-cause discipline.
 ---
 
 # Optimizing a user's Claude Code usage cost
@@ -11,7 +11,7 @@ Investigate a user's Claude Code setup (via the transcripts DuckDB at `~/.local/
 
 Category rollups ("cost by model", "cost by project") are trivially produced and trivially misleading. They say where money went, not why. The why lives in the workflow — which skills run, what artifacts they produce, how those artifacts propagate to subagents, how they sit in context for what fraction of a session, whether the cache prefix is being invalidated mid-session, which system-prompt bloat (MCP schemas, hooks, CLAUDE.md) gets re-cached every turn. That chain is what you must reconstruct.
 
-This is methodology. It sits on `claude-usage-db` for raw SQL — **read that first** for the billing-safety rule. Every cost aggregation must use `assistant_entries_deduped` with `message_id IS NOT NULL`, or numbers are ~2× too high.
+This is methodology. It sits on `cct-db` for raw SQL — **read that first** for the billing-safety rule. Every cost aggregation must use `assistant_entries_deduped` with `message_id IS NOT NULL`, or numbers are ~2× too high.
 
 ## The core premise
 
