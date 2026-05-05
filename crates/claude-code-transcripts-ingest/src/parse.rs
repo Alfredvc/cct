@@ -1098,6 +1098,7 @@ fn build_attachment(
         Diagnostics { .. } => "diagnostics",
         DateChange { .. } => "date_change",
         DeferredToolsDelta { .. } => "deferred_tools_delta",
+        AgentListingDelta { .. } => "agent_listing_delta",
         McpInstructionsDelta { .. } => "mcp_instructions_delta",
         UltrathinkEffort { .. } => "ultrathink_effort",
         QueuedCommand { .. } => "queued_command",
@@ -1302,6 +1303,12 @@ fn build_attachment(
                 Some(v) => json_str(&json!(v)),
                 None => Value::Null,
             };
+        }
+        AgentListingDelta { .. } => {
+            // Classify-only: attachment_type column captures the variant.
+            // Inner fields (addedTypes/addedLines/removedTypes/isInitial
+            // /showConcurrencyNote) are not flattened into dedicated columns —
+            // the agent listing payload is verbose and out of scope here.
         }
         McpInstructionsDelta {
             added_names,

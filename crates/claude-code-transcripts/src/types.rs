@@ -867,6 +867,26 @@ pub enum AttachmentData {
         removed_names: Option<Vec<String>>,
     },
 
+    /// Diff of available agent types announced to the assistant. Sibling of
+    /// `DeferredToolsDelta` / `McpInstructionsDelta` but for the agent
+    /// listing. `isInitial` is true on the first injection per session;
+    /// `showConcurrencyNote` toggles a UI hint about parallel agent dispatch.
+    AgentListingDelta {
+        #[serde(rename = "addedTypes")]
+        added_types: Vec<String>,
+        #[serde(rename = "addedLines")]
+        added_lines: Vec<String>,
+        #[serde(rename = "removedTypes")]
+        removed_types: Vec<String>,
+        #[serde(rename = "isInitial", skip_serializing_if = "Option::is_none")]
+        is_initial: Option<bool>,
+        #[serde(
+            rename = "showConcurrencyNote",
+            skip_serializing_if = "Option::is_none"
+        )]
+        show_concurrency_note: Option<bool>,
+    },
+
     // ── Thinking effort ──────────────────────────────────────────────────
     UltrathinkEffort {
         level: String,
@@ -1586,6 +1606,21 @@ mod tests {
         // Note: `attributionSkill` value is opaque (user-specific plugin slug).
         // Test fixture uses neutral placeholders — values are not part of the schema contract.
         let json = r#"{"uuid":"a2","parentUuid":null,"isSidechain":true,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"assistant","attributionAgent":"plugin1:agent1","attributionPlugin":"plugin1","attributionSkill":"plugin1:skill1","message":{"id":"msg1","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        let v: Entry = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
+    }
+
+    /// `agent_listing_delta` attachment round-trips with all five fields.
+    /// Regression test for the 2026-05-05 attachment shape change — prior
+    /// code dropped this variant into `Unknown`, losing addedTypes/addedLines
+    /// /removedTypes/isInitial/showConcurrencyNote.
+    #[test]
+    fn attachment_agent_listing_delta_round_trips() {
+        let json = r#"{"uuid":"a3","parentUuid":null,"isSidechain":false,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"attachment","attachment":{"type":"agent_listing_delta","addedTypes":["Explore","plugin1:agent1"],"addedLines":["- Explore: Fast read-only search","- plugin1:agent1: example"],"removedTypes":[],"isInitial":true,"showConcurrencyNote":true}}"#;
         let v: Entry = serde_json::from_str(json).unwrap();
         let back = serde_json::to_string(&v).unwrap();
 
