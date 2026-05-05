@@ -1,6 +1,6 @@
 ---
 name: claude-usage-db
-description: Query the local DuckDB of ingested Claude Code transcripts (`~/.local/share/cct/transcripts.duckdb` by default, or `$XDG_DATA_HOME/cct/transcripts.duckdb`) to answer any question about sessions, costs, tokens, tools, models, cache hits, subagents, skills invoked, permission modes, or raw conversation data. Use this skill whenever the user wants to run SQL against that DB or asks analytical questions whose answer lives in it — "show me sessions from last week", "cost breakdown by model", "which tools did I call most", "how much on Opus yesterday", "pull the raw data", "find sessions where…", "longest sessions", "top Bash commands", "top files edited", "cache hit rate", "what skills have I used", "first-turn cache creation", "main-chain vs subagent cost", or any aggregate/filter/ranking over transcripts. Do NOT use for advice-shaped questions like "how do I reduce my spend" (that belongs to `optimize-usage`), for rebuilding the DB (that's the `cct` binary), or for questions about the transcripts file format itself. The DB has one critical billing footgun (raw `assistant_entries` overcounts cost ~2×) — this skill prevents it.
+description: Query the local DuckDB of ingested Claude Code transcripts (`~/.local/share/cct/transcripts.duckdb` by default, or `$XDG_DATA_HOME/cct/transcripts.duckdb`) to answer any question about sessions, costs, tokens, tools, models, cache hits, subagents, skills invoked, permission modes, or raw conversation data. Use this skill whenever the user wants to run SQL against that DB or asks analytical questions whose answer lives in it — "show me sessions from last week", "cost breakdown by model", "which tools did I call most", "how much on Opus yesterday", "pull the raw data", "find sessions where…", "longest sessions", "top Bash commands", "top files edited", "cache hit rate", "what skills have I used", "first-turn cache creation", "main-chain vs subagent cost", or any aggregate/filter/ranking over transcripts. Also use for **cumulative cost attribution** — "what would I save if I compacted bash outputs / trimmed file reads / shrunk CLAUDE.md", "how much is X costing me over the whole session", "is hook Y net-positive", "ROI of compressing tool outputs" — the cumulative model (cache_read paid on every later turn) and the pricing-JOIN sanity-check pattern live in `references/cumulative-cost-analysis.md`. Do NOT use for advice-shaped questions like "how do I reduce my spend" (that belongs to `optimize-usage`), for rebuilding the DB (that's the `cct` binary), or for questions about the transcripts file format itself. The DB has two critical billing footguns (raw `assistant_entries` overcounts cost ~2×; naive `model_pricing` LIKE-join inflates rates 2-3×) — this skill prevents both.
 ---
 
 # Querying the Claude transcripts DuckDB
@@ -463,7 +463,9 @@ Turn-by-turn thread traversal that survives compaction: follow `logical_parent_u
 
 ## Joining against `model_pricing`
 
-`model_pricing.model` is a short name (e.g. `claude-haiku-4-5`) but `assistant_entries.model` is often a dated revision (`claude-haiku-4-5-20251001`). A naive `JOIN ON d.model = p.model` silently drops every revisioned row. Prefix-match instead:
+`model_pricing.model` is a short name (e.g. `claude-haiku-4-5`) but `assistant_entries.model` is often a dated revision (`claude-haiku-4-5-20251001`). A naive `JOIN ON d.model = p.model` silently drops every revisioned row. Prefix-match instead — but be aware of the dup trap below.
+
+> **Footgun.** A simple `LIKE p.model || '%'` join matches *multiple* pricing rows when the family has both versioned and unversioned entries (`claude-haiku-4-5-20251001` matches `claude-haiku` *and* `claude-haiku-4-5`). Every cost computed downstream gets inflated 2-3× and still looks plausible. For any non-trivial cost analysis use a longest-prefix match and a recompute-vs-`SUM(cost_usd)` sanity check — see [`references/cumulative-cost-analysis.md`](references/cumulative-cost-analysis.md) for the safe pattern.
 
 ```sql
 -- Actual vs "no caching ever existed": apply fresh-input rate to all three input buckets;
@@ -651,3 +653,13 @@ SELECT * FROM assistant_entries_deduped USING SAMPLE 5 ROWS;
 ```
 
 If a question feels like "what does column X mean?" or "how does table Y link to Z?" — ask the DB. Schema comments are authoritative; this skill is a guide on top of them.
+
+---
+
+## References
+
+Deeper methodology that doesn't belong in the main flow lives in `references/`. Load the relevant file when the question matches.
+
+| File | Read when |
+|------|-----------|
+| [`references/cumulative-cost-analysis.md`](references/cumulative-cost-analysis.md) | The user asks "how much does X cost me cumulatively?" or "what would I save if I trimmed/compacted Y?" — anything where the cost of a thing injected into context (tool result, file read, hook output, system-prompt section, skill body) needs to be summed across all subsequent turns that re-read the prefix. Covers the pricing-JOIN footgun, longest-prefix rate match, the cumulative-attribution SQL pattern, hook ROI math, and the recompute-vs-`SUM(cost_usd)` sanity check that catches silent 2-3× errors. |
