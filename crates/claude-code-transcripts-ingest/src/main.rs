@@ -1,7 +1,7 @@
 use clap::Parser;
 
 use claude_code_transcripts_ingest::cli::{Cli, Command};
-use claude_code_transcripts_ingest::{info, run, serve, update, version_check};
+use claude_code_transcripts_ingest::{extract, info, report, run, serve, update, version_check};
 
 #[tokio::main]
 async fn main() {
@@ -16,5 +16,7 @@ async fn main() {
         Command::Serve(args) => serve::run(args).await,
         Command::Info(args) => info::run(args),
         Command::Update(args) => update::run(args),
+        Command::Report(args) => report::run(args),
+        Command::Extract(args) => extract::run(args),
     }
 }

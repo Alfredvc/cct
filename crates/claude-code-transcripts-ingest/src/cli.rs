@@ -44,6 +44,10 @@ pub enum Command {
     Info(InfoArgs),
     /// Update cct to the latest GitHub release (or a specific version)
     Update(UpdateArgs),
+    /// Render a human-readable report from the DB
+    Report(ReportArgs),
+    /// Dump structured JSON for downstream tooling
+    Extract(ExtractArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -101,4 +105,90 @@ pub struct UpdateArgs {
     /// Skip the interactive confirmation prompt.
     #[arg(short = 'y', long = "yes")]
     pub yes: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ReportArgs {
+    #[command(subcommand)]
+    pub kind: ReportKind,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ReportKind {
+    /// API token usage and cost breakdown by model
+    Usage(UsageArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct UsageArgs {
+    /// DuckDB database file to query.
+    #[arg(long = "db", default_value_os_t = default_output_db())]
+    pub db: PathBuf,
+
+    /// Project directory to filter on. Defaults to the current working directory.
+    #[arg(long = "project")]
+    pub project: Option<PathBuf>,
+
+    /// Scan all projects (overrides --project and --no-subdirs).
+    #[arg(long = "all", conflicts_with_all = ["project", "no_subdirs"])]
+    pub all: bool,
+
+    /// Match only the project's exact cwd (skip worktrees / subdirectory cwds).
+    #[arg(long = "no-subdirs")]
+    pub no_subdirs: bool,
+
+    /// Include events on or after this date (YYYY-MM-DD, UTC).
+    #[arg(long = "from")]
+    pub from: Option<String>,
+
+    /// Include events on or before this date (YYYY-MM-DD, UTC, inclusive).
+    #[arg(long = "to")]
+    pub to: Option<String>,
+
+    /// Emit machine-readable JSON instead of formatted text.
+    #[arg(long = "json")]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ExtractArgs {
+    #[command(subcommand)]
+    pub kind: ExtractKind,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ExtractKind {
+    /// Per-turn session metadata (tools, skills, errors, tokens, subagents)
+    Sessions(ExtractSessionsArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ExtractSessionsArgs {
+    /// DuckDB database file to query.
+    #[arg(long = "db", default_value_os_t = default_output_db())]
+    pub db: PathBuf,
+
+    /// Project directory to filter on. Defaults to the current working directory.
+    #[arg(long = "project")]
+    pub project: Option<PathBuf>,
+
+    /// Scan all projects (overrides --project and --no-subdirs).
+    #[arg(long = "all", conflicts_with_all = ["project", "no_subdirs"])]
+    pub all: bool,
+
+    /// Match only the project's exact cwd (skip worktrees / subdirectory cwds).
+    #[arg(long = "no-subdirs")]
+    pub no_subdirs: bool,
+
+    /// Filter to a specific session id (or unique prefix).
+    #[arg(long = "session")]
+    pub session: Option<String>,
+
+    /// Include sessions starting on or after this date (YYYY-MM-DD, UTC).
+    #[arg(long = "from")]
+    pub from: Option<String>,
+
+    /// Include sessions starting on or before this date (YYYY-MM-DD, UTC, inclusive).
+    #[arg(long = "to")]
+    pub to: Option<String>,
 }

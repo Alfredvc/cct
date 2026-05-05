@@ -98,6 +98,42 @@ A multi-panel cost dashboard split into two sub-tabs. Switch between them with t
 
 ![cct serve dashboard](https://raw.githubusercontent.com/alfredvc/cct/main/docs/assets/dashboard.png)
 
+### `cct report usage`
+
+```
+cct report usage [--db <file>] [--project <dir> | --all] [--no-subdirs]
+                 [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--json]
+```
+
+Token and cost breakdown by model, computed from `assistant_entries_deduped`. Default scope is the current working directory plus its subdirectory cwds (worktrees, sub-projects); narrow with `--no-subdirs` or widen with `--all`. Defaults to formatted text; `--json` emits a machine-readable structure.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--db` | `~/.local/share/cct/transcripts.duckdb` | DB file to query |
+| `--project` | current cwd | Project directory to filter on (matched against `entries.cwd`) |
+| `--all` | — | Scan all projects (overrides `--project` and `--no-subdirs`) |
+| `--no-subdirs` | — | Match only the project's exact cwd; skip worktree / subdirectory cwds |
+| `--from`, `--to` | — | Inclusive date range (`YYYY-MM-DD`, UTC) |
+| `--json` | — | Emit JSON instead of formatted text |
+
+### `cct extract sessions`
+
+```
+cct extract sessions [--db <file>] [--project <dir> | --all] [--no-subdirs]
+                     [--session <id-or-prefix>] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+```
+
+Dumps structured per-turn session metadata as JSON: conversations grouped by slug, sessions inside each, turns inside each session, with tools / skills / errors / tokens and inlined subagent metadata (model, calls, tokens, tools, skills, errors). Always JSON; pipe to `jq` or feed to downstream analysis tooling.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--db` | `~/.local/share/cct/transcripts.duckdb` | DB file to query |
+| `--project` | current cwd | Project directory to filter on |
+| `--all` | — | Scan all projects |
+| `--no-subdirs` | — | Match only the project's exact cwd |
+| `--session` | — | Filter to a specific `session_id` (or unique prefix) |
+| `--from`, `--to` | — | Inclusive date range (`YYYY-MM-DD`, UTC) |
+
 ### `cct info`
 
 ```

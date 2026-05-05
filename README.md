@@ -58,6 +58,16 @@ Then ask Claude anything about your usage:
 
 Claude picks up the schema from the `cct-db` skill and runs SQL against your local DB.
 
+Or skip Claude entirely for the common cases:
+
+```bash
+cct serve                 # interactive viewer at http://localhost:8766
+cct report usage          # token + cost breakdown by model (text or --json)
+cct extract sessions      # structured per-turn JSON dump for downstream tooling
+```
+
+`report` and `extract` default to the current project (cwd + worktrees); pass `--all` for every project, `--from/--to` to window by date. See the [`cct` reference](crates/claude-code-transcripts-ingest/README.md#cct-report-usage) for the full flag list.
+
 ## Skills
 
 Skills are investigation playbooks. They give Claude the schema, recipes, and methodology to answer specific classes of question. Mix and match — or write your own.
