@@ -1090,6 +1090,8 @@ fn build_attachment(
         CommandPermissions { .. } => "command_permissions",
         PlanMode { .. } => "plan_mode",
         PlanModeExit { .. } => "plan_mode_exit",
+        AutoMode { .. } => "auto_mode",
+        AutoModeExit => "auto_mode_exit",
         SkillListing { .. } => "skill_listing",
         DynamicSkill { .. } => "dynamic_skill",
         InvokedSkills { .. } => "invoked_skills",
@@ -1309,6 +1311,9 @@ fn build_attachment(
             // Inner fields (addedTypes/addedLines/removedTypes/isInitial
             // /showConcurrencyNote) are not flattened into dedicated columns —
             // the agent listing payload is verbose and out of scope here.
+        }
+        AutoMode { .. } | AutoModeExit => {
+            // Classify-only: attachment_type captures the variant.
         }
         McpInstructionsDelta {
             added_names,

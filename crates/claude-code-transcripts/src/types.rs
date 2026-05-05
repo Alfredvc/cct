@@ -800,6 +800,14 @@ pub enum AttachmentData {
         plan_exists: bool,
     },
 
+    // ── Auto mode ────────────────────────────────────────────────────────
+    AutoMode {
+        #[serde(rename = "reminderType")]
+        reminder_type: String,
+    },
+
+    AutoModeExit,
+
     // ── Skills ───────────────────────────────────────────────────────────
     SkillListing {
         content: String,
@@ -1628,6 +1636,28 @@ mod tests {
         let v: Entry = serde_json::from_str(json).unwrap();
         let back = serde_json::to_string(&v).unwrap();
 
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
+    }
+
+    /// `auto_mode` and `auto_mode_exit` attachment variants round-trip.
+    /// Sibling shape of `plan_mode` / `plan_mode_exit`.
+    #[test]
+    fn attachment_auto_mode_round_trips() {
+        let json = r#"{"uuid":"a5","parentUuid":null,"isSidechain":false,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"attachment","attachment":{"type":"auto_mode","reminderType":"full"}}"#;
+        let v: Entry = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
+    }
+
+    #[test]
+    fn attachment_auto_mode_exit_round_trips() {
+        let json = r#"{"uuid":"a6","parentUuid":null,"isSidechain":false,"sessionId":"s1","timestamp":"2026-05-05T00:00:00.000Z","type":"attachment","attachment":{"type":"auto_mode_exit"}}"#;
+        let v: Entry = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_string(&v).unwrap();
         let original: serde_json::Value = serde_json::from_str(json).unwrap();
         let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
         assert_eq!(roundtripped, original);
