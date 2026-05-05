@@ -144,10 +144,6 @@ function emptyStreams(): StreamMap {
   return { fresh_input: 0, cache_read: 0, cache_create: 0, output_write: 0 };
 }
 
-// For a node, walk its descendants and accumulate cost split by stream
-// (the stream is determined by the first ancestor whose name is a stream key,
-// scanning from the leaf toward the node — and falling back to scanning
-// outward through the supplied prefix path if no inner ancestor matched).
 function aggregateByStream(
   node: TreeNode,
   prefixPath: string[],
@@ -156,7 +152,6 @@ function aggregateByStream(
   let total = 0;
   let leafCount = 0;
 
-  // Determine if the prefix already pinned a stream
   let prefixStream: string | null = null;
   for (const name of prefixPath) {
     if (name in STREAM_BY_KEY) {
@@ -237,15 +232,12 @@ export function CostPage() {
     return findNode(data.tree, zoomPath);
   }, [data, zoomPath]);
 
-  // Stream totals across the whole tree (for the top stacked bar — always global)
   const { totals: globalStreamTotals, grand: globalGrand } = useMemo(() => {
     if (!data) return { totals: emptyStreams(), grand: 0 };
     const agg = aggregateByStream(data.tree, []);
     return { totals: agg.streams, grand: agg.total };
   }, [data]);
 
-  // Rows = direct children of zoomed node. For each child, aggregate its
-  // descendants by stream so the user sees the orthogonal split inline.
   const rows: Row[] = useMemo(() => {
     if (!located) return [];
     const { node } = located;
@@ -270,7 +262,6 @@ export function CostPage() {
 
   const zoomTotal = located?.node.value ?? 0;
 
-  // Filter rows by search + stream filter
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     let r = rows;
@@ -295,8 +286,6 @@ export function CostPage() {
     .slice(TOP_N_DEFAULT)
     .reduce((s, r) => s + r.total, 0);
 
-  // Max row total — used to scale bar fill width so the largest row uses 100%
-  // of the bar track.
   const maxRowTotal = visibleRows[0]?.total ?? 0;
 
   if (error) {
@@ -322,26 +311,50 @@ export function CostPage() {
   const attributed = data.total_attributed_usd;
   const coverage = billed > 0 ? attributed / billed : 0;
 
-  // Crumbs: ["all", ...zoomPath]
+  // Format the headline number into integer + decimal parts so we can render
+  // them at different visual weights (decimals lighter / smaller).
+  const billedParts = billed
+    .toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+    .split(".");
+  const billedInt = billedParts[0];
+  const billedFrac = billedParts[1] ?? "00";
+
+  // Top stream by share — fuels the "headline finding" narrative line.
+  const sortedStreams = [...STREAMS]
+    .map((s) => ({
+      ...s,
+      v: globalStreamTotals[s.key] ?? 0,
+      pct: globalGrand > 0 ? (globalStreamTotals[s.key] ?? 0) / globalGrand : 0,
+    }))
+    .sort((a, b) => b.v - a.v);
+  const topStream = sortedStreams[0];
+
   const crumbs = ["all", ...zoomPath];
 
-  // The bucket-description caption that appears when zoomed inside a known
-  // bucket. Show the description of the current zoom root (top-level bucket
-  // if zoomed at depth ≥ 1).
   const currentBucketKey = zoomPath[0];
   const currentBucketDesc =
     currentBucketKey && BUCKET_LABELS[currentBucketKey]
       ? BUCKET_LABELS[currentBucketKey].desc
       : null;
 
+  // Top-row insight: when at the top level, surface a callout if the leader
+  // dominates the zoomed total.
+  const topRow = rows[0];
+  const topRowShare =
+    topRow && zoomTotal > 0 ? topRow.total / zoomTotal : 0;
+
   return (
     <>
       <div className="cost-subhead">
         <div className="days-badge">
+          <span className="db-dot" />
           last <strong>{data.days}d</strong>
         </div>
         <div className="computed">
-          computed {new Date(data.computed_at).toLocaleString()}
+          updated {new Date(data.computed_at).toLocaleString()}
         </div>
         <input
           type="search"
@@ -353,61 +366,77 @@ export function CostPage() {
       </div>
 
       <div className="cost-page">
-        <div className="cost-hero">
-          <div className="panel">
-            <div className="panel-title">
-              Total billed
-              <span className="panel-meta">last {data.days} days</span>
+        {/* ─── HERO ─────────────────────────────────────────────── */}
+        <section className="cost-hero-v2">
+          <div className="hero-grid-bg" aria-hidden />
+
+          <div className="hero-left">
+            <div className="hero-eyebrow">
+              <span className="eb-rule" />
+              <span>Total billed · last {data.days} days</span>
             </div>
-            <div className="hero-headline">
-              <div className="hero-amount">
-                $
-                {billed.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </div>
-              <div className="hero-label">USD</div>
+
+            <div className="hero-figure">
+              <span className="hero-currency">$</span>
+              <span className="hero-int">{billedInt}</span>
+              <span className="hero-frac">.{billedFrac}</span>
+              <span className="hero-iso">USD</span>
             </div>
+
             <div className="hero-coverage">
-              <span className="cov-detail">attributed</span>
-              <span className="cov-pct">{(coverage * 100).toFixed(1)}%</span>
-              <div className="cov-bar">
-                <div
+              <span className="cov-bar">
+                <span
                   className="cov-fill"
                   style={{ width: `${(coverage * 100).toFixed(2)}%` }}
                 />
-              </div>
-              <span className="cov-detail">
-                $
-                {attributed.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}{" "}
-                / $
-                {billed.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
+              </span>
+              <span className="cov-text">
+                <strong>{(coverage * 100).toFixed(1)}%</strong>
+                <span className="cov-sep">·</span>
+                <span className="cov-num">
+                  ${attributed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>{" "}
+                <span className="cov-detail">attributed of</span>{" "}
+                <span className="cov-num">
+                  ${billed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>{" "}
+                <span className="cov-detail">billed</span>
               </span>
             </div>
+
+            {topStream && topStream.pct > 0 && (
+              <p className="hero-narrative">
+                <span className="hn-quote">“</span>
+                <strong style={{ color: `var(${topStream.cssVar})` }}>
+                  {topStream.label}
+                </strong>{" "}
+                {topStream.pct >= 0.4 ? "dominates" : "leads"} at{" "}
+                <strong>{fmtPct(topStream.pct)}</strong>
+                <span className="hn-em"> — {topStream.desc}.</span>
+              </p>
+            )}
           </div>
 
-          <div className="panel stream-bar-panel">
-            <div className="panel-title">
-              Stream split
-              <span className="panel-meta">click to filter rows</span>
+          <div className="hero-right">
+            <div className="hero-eyebrow hero-eyebrow-right">
+              <span>Where it goes</span>
+              <span className="eb-hint">click a band to filter</span>
             </div>
-            <div className="stream-bar">
+
+            <div
+              className={`stream-bar-v2 ${streamFilter ? "has-filter" : ""}`}
+            >
               {STREAMS.map((s) => {
                 const v = globalStreamTotals[s.key] ?? 0;
                 const pct = globalGrand > 0 ? v / globalGrand : 0;
                 if (pct < 0.001) return null;
                 const dimmed = streamFilter && streamFilter !== s.key;
+                const active = streamFilter === s.key;
                 return (
-                  <div
+                  <button
                     key={s.key}
-                    className={`stream-seg ${dimmed ? "dim" : ""}`}
+                    type="button"
+                    className={`sb-seg ${dimmed ? "dim" : ""} ${active ? "active" : ""}`}
                     style={{
                       width: `${pct * 100}%`,
                       background: `var(${s.cssVar})`,
@@ -417,116 +446,147 @@ export function CostPage() {
                     }
                     title={`${s.label} — ${fmtUsdFull(v)} (${fmtPct(pct)})`}
                   >
-                    {pct > 0.07 ? `${s.label} ${fmtPct(pct)}` : ""}
-                  </div>
+                    {pct > 0.06 && (
+                      <span className="sb-seg-text">
+                        <span className="sb-seg-pct">{fmtPct(pct)}</span>
+                      </span>
+                    )}
+                  </button>
                 );
               })}
             </div>
-            <div className="stream-bar-hint">
-              {streamFilter
-                ? `filtered to ${STREAM_BY_KEY[streamFilter].label} — click again to clear`
-                : "click a segment to filter the rows below"}
-            </div>
-          </div>
-        </div>
 
-        <div className="stream-cards">
-          {STREAMS.map((s) => {
-            const v = globalStreamTotals[s.key] ?? 0;
-            const pct = globalGrand > 0 ? v / globalGrand : 0;
-            const isActive = streamFilter === s.key;
-            const isDim = streamFilter && !isActive;
-            return (
-              <div
-                key={s.key}
-                className={`stream-card ${isActive ? "active" : ""} ${
-                  isDim ? "dim" : ""
-                }`}
-                style={
-                  {
-                    ["--card-accent" as string]: `var(${s.cssVar})`,
-                  } as React.CSSProperties
-                }
-                onClick={() =>
-                  setStreamFilter(streamFilter === s.key ? null : s.key)
-                }
-              >
-                <div className="sc-label">
-                  <span className="sc-dot" /> {s.label}
-                </div>
-                <div className="sc-amount">{fmtUsdFull(v)}</div>
-                <div className="sc-meta">
-                  <span className="sc-pct">{fmtPct(pct)}</span>
-                  <span>of attributed</span>
-                </div>
-                <div className="sc-desc">{s.desc}</div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="panel cost-rows-panel">
-          <div className="rows-toolbar">
-            <div className="cost-crumbs">
-              {crumbs.map((c, i) => {
-                const last = i === crumbs.length - 1;
-                const label =
-                  i === 0 ? "all" : labelFor(c, i);
+            <div className="stream-legend">
+              {sortedStreams.map((s) => {
+                const isActive = streamFilter === s.key;
+                const isDim = streamFilter && !isActive;
                 return (
-                  <span key={i} className="crumb-wrap">
-                    <span
-                      className={`crumb ${last ? "current" : ""}`}
-                      onClick={() =>
-                        !last && setZoomPath(zoomPath.slice(0, i))
-                      }
-                    >
-                      {label}
-                    </span>
-                    {!last && <span className="crumb-sep">›</span>}
-                  </span>
+                  <button
+                    key={s.key}
+                    type="button"
+                    className={`sl-chip ${isActive ? "active" : ""} ${isDim ? "dim" : ""}`}
+                    style={
+                      {
+                        ["--chip-accent" as string]: `var(${s.cssVar})`,
+                      } as React.CSSProperties
+                    }
+                    onClick={() =>
+                      setStreamFilter(streamFilter === s.key ? null : s.key)
+                    }
+                    title={s.desc}
+                  >
+                    <span className="sl-dot" />
+                    <span className="sl-label">{s.label}</span>
+                    <span className="sl-amount">{fmtUsdFull(s.v)}</span>
+                    <span className="sl-pct">{fmtPct(s.pct)}</span>
+                  </button>
                 );
               })}
             </div>
-            <button
-              className="cost-reset"
-              onClick={() => setZoomPath([])}
-              disabled={zoomPath.length === 0}
-            >
-              reset
-            </button>
-            <div className="rows-meta">
-              showing <strong>{filteredRows.length}</strong>{" "}
-              {filteredRows.length === 1 ? "row" : "rows"} · zoom total{" "}
-              <strong>{fmtUsdFull(zoomTotal)}</strong>
+
+            {streamFilter && (
+              <div className="stream-filter-active">
+                filtering rows below to{" "}
+                <strong style={{ color: `var(${STREAM_BY_KEY[streamFilter].cssVar})` }}>
+                  {STREAM_BY_KEY[streamFilter].label}
+                </strong>{" "}
+                · <button className="sf-clear" onClick={() => setStreamFilter(null)}>clear</button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ─── INSIGHT CALLOUT (top of zoom) ────────────────────── */}
+        {zoomPath.length === 0 && topRow && topRowShare >= 0.25 && (
+          <div className="cost-insight">
+            <span className="ci-bullet">▲</span>
+            <span>
+              <strong>{topRow.label}</strong> is your largest line at{" "}
+              <strong>{fmtUsdFull(topRow.total)}</strong> ({fmtPct(topRowShare)}).{" "}
+              {topRow.hasChildren && (
+                <button
+                  className="ci-link"
+                  onClick={() => setZoomPath([...zoomPath, topRow.name])}
+                >
+                  drill in →
+                </button>
+              )}
+            </span>
+          </div>
+        )}
+
+        {/* ─── ROWS PANEL ───────────────────────────────────────── */}
+        <section className="cost-rows-panel-v2">
+          <header className="rows-header-strip">
+            <div className="rhs-left">
+              <div className="rhs-title">
+                <span className="rhs-kicker">Breakdown</span>
+                <span className="rhs-trail">
+                  {crumbs.map((c, i) => {
+                    const last = i === crumbs.length - 1;
+                    const label = i === 0 ? "all" : labelFor(c, i);
+                    return (
+                      <span key={i} className="trail-wrap">
+                        <button
+                          type="button"
+                          className={`trail-crumb ${last ? "current" : ""}`}
+                          onClick={() =>
+                            !last && setZoomPath(zoomPath.slice(0, i))
+                          }
+                          disabled={last}
+                        >
+                          {label}
+                        </button>
+                        {!last && <span className="trail-sep">/</span>}
+                      </span>
+                    );
+                  })}
+                </span>
+              </div>
+              {currentBucketDesc && (
+                <p className="rhs-caption">{currentBucketDesc}</p>
+              )}
             </div>
-          </div>
+            <div className="rhs-right">
+              <span className="rhs-meta">
+                <strong>{filteredRows.length}</strong>{" "}
+                {filteredRows.length === 1 ? "row" : "rows"}
+                <span className="rhs-meta-sep">·</span>
+                <span>{fmtUsdFull(zoomTotal)}</span>
+              </span>
+              {zoomPath.length > 0 && (
+                <button
+                  className="rhs-reset"
+                  onClick={() => setZoomPath([])}
+                  title="reset to top level"
+                >
+                  ↩ reset
+                </button>
+              )}
+            </div>
+          </header>
 
-          {currentBucketDesc && (
-            <div className="rows-caption">{currentBucketDesc}</div>
-          )}
-
-          <div className="rows-header">
+          <div className="rows-table-head">
             <div className="rh-rank">#</div>
-            <div className="rh-label">name</div>
-            <div className="rh-bar">cost · split by stream</div>
-            <div className="rh-amount">$</div>
-            <div className="rh-pct">%</div>
+            <div className="rh-label">name · description</div>
+            <div className="rh-bar">distribution</div>
+            <div className="rh-amount">cost</div>
+            <div className="rh-pct">share</div>
+            <div className="rh-spacer" />
           </div>
 
-          <div className="cost-rows">
+          <div className="rows-list">
             {visibleRows.length === 0 && (
               <div className="rows-empty">no rows match</div>
             )}
             {visibleRows.map((row, idx) => {
               const pct = zoomTotal > 0 ? row.total / zoomTotal : 0;
               const fillWidth =
-                maxRowTotal > 0
-                  ? (row.total / maxRowTotal) * 100
-                  : 0;
+                maxRowTotal > 0 ? (row.total / maxRowTotal) * 100 : 0;
               return (
                 <div
                   key={row.name}
-                  className={`row ${row.hasChildren ? "drillable" : ""}`}
+                  className={`row-v2 ${row.hasChildren ? "drillable" : ""}`}
                   onClick={() =>
                     row.hasChildren &&
                     setZoomPath([...zoomPath, row.name])
@@ -537,21 +597,21 @@ export function CostPage() {
                       : `${row.label} — leaf`
                   }
                 >
-                  <div className="r-rank">{idx + 1}</div>
-                  <div className="r-label">
-                    <div className="r-name">{row.label}</div>
-                    {row.desc && <div className="r-desc">{row.desc}</div>}
+                  <div className="rv-rank">{String(idx + 1).padStart(2, "0")}</div>
+                  <div className="rv-label">
+                    <div className="rv-name">{row.label}</div>
+                    {row.desc && <div className="rv-desc">{row.desc}</div>}
                     {!row.desc && row.leafCount > 1 && (
-                      <div className="r-desc">
+                      <div className="rv-desc">
                         {row.leafCount.toLocaleString()} leaves
                         {row.hasChildren ? ` · ${row.childCount} children` : ""}
                       </div>
                     )}
                   </div>
-                  <div className="r-bar">
-                    <div className="r-bar-track">
+                  <div className="rv-bar">
+                    <div className="rv-bar-track">
                       <div
-                        className="r-bar-fill"
+                        className="rv-bar-fill"
                         style={{ width: `${fillWidth.toFixed(2)}%` }}
                       >
                         {STREAMS.map((s) => {
@@ -561,7 +621,7 @@ export function CostPage() {
                           return (
                             <div
                               key={s.key}
-                              className="r-bar-seg"
+                              className="rv-bar-seg"
                               style={{
                                 width: `${segPct.toFixed(2)}%`,
                                 background: `var(${s.cssVar})`,
@@ -573,9 +633,17 @@ export function CostPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="r-amount">{fmtUsdFull(row.total)}</div>
-                  <div className="r-pct">{fmtPct(pct)}</div>
-                  <div className="r-chev">
+                  <div className="rv-amount">{fmtUsdFull(row.total)}</div>
+                  <div className="rv-pct">
+                    <span className="rv-pct-bar">
+                      <span
+                        className="rv-pct-fill"
+                        style={{ width: `${(pct * 100).toFixed(2)}%` }}
+                      />
+                    </span>
+                    <span className="rv-pct-val">{fmtPct(pct)}</span>
+                  </div>
+                  <div className="rv-chev">
                     {row.hasChildren ? "›" : ""}
                   </div>
                 </div>
@@ -585,22 +653,27 @@ export function CostPage() {
 
           {hiddenCount > 0 && !expanded && (
             <button
-              className="rows-expand"
+              className="rows-expand-v2"
               onClick={() => setExpanded(true)}
             >
-              show {hiddenCount} more · {fmtUsdFull(hiddenTotal)} ·{" "}
-              {fmtPct(zoomTotal > 0 ? hiddenTotal / zoomTotal : 0)}
+              <span>show {hiddenCount} more</span>
+              <span className="rxv-meta">
+                {fmtUsdFull(hiddenTotal)} ·{" "}
+                {fmtPct(zoomTotal > 0 ? hiddenTotal / zoomTotal : 0)}
+              </span>
+              <span className="rxv-arrow">▾</span>
             </button>
           )}
           {expanded && filteredRows.length > TOP_N_DEFAULT && (
             <button
-              className="rows-expand"
+              className="rows-expand-v2"
               onClick={() => setExpanded(false)}
             >
-              collapse
+              <span>collapse</span>
+              <span className="rxv-arrow">▴</span>
             </button>
           )}
-        </div>
+        </section>
       </div>
     </>
   );
