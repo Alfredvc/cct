@@ -1334,6 +1334,7 @@ fn build_attachment(
         QueuedCommand {
             prompt,
             command_mode,
+            image_paste_ids: _,
         } => {
             row[41] = match prompt {
                 Value::String(t) => s_str(t),

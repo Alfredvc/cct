@@ -918,6 +918,10 @@ pub enum AttachmentData {
         prompt: Value,
         #[serde(rename = "commandMode", skip_serializing_if = "Option::is_none")]
         command_mode: Option<String>,
+        /// IDs of images pasted into the queued prompt. Mirrors the field of
+        /// the same name on `UserEntry`.
+        #[serde(rename = "imagePasteIds", skip_serializing_if = "Option::is_none")]
+        image_paste_ids: Option<Vec<u64>>,
     },
 
     // ── Nested memory (CLAUDE.md imports) ────────────────────────────────
