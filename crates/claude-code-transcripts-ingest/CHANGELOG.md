@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11] - 2026-05-05
+
+### 🚀 Features
+
+- *(transcripts)* Add AgentListingDelta attachment variant
+- *(transcripts)* Add AutoMode and AutoModeExit attachment variants
+- *(transcripts)* Add readdedNames on deferred_tools_delta attachment
+- *(transcripts)* Add imagePasteIds on queued_command attachment
+- *(transcripts)* Add PlanFileReference attachment variant
+- *(ingest)* Add attribution and cache_miss_reason columns to assistant_entries
+- *(ingest)* Populate attribution and cache_miss_reason columns from typed fields
+- *(ingest)* Plumb api_error_status, plan_file_reference, readdedNames to DB
+- *(serve)* Cost-decomposition flamegraph at /cost
+- *(serve)* Replace /cost flamegraph with sorted-row drilldown
+- *(web)* Redesign /cost page with editorial hero and unified hierarchy
+- *(cct)* Add `report usage` and `extract sessions` subcommands
+
+### 🐛 Bug Fixes
+
+- *(build)* Re-run npm ci when package-lock.json changes
+
+### ⚙️ Miscellaneous Tasks
+
+- Rename repo to cct and reframe README
+- Backfill v0.1.10 changelog section
+- *(skills)* Rename claude-usage-db -> cct-db
+
 ## [0.1.10] - 2026-05-03
 
 ### 🚀 Features

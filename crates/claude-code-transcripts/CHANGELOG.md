@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11] - 2026-05-05
+
+### 🚀 Features
+
+- *(transcripts)* Add AssistantDiagnostics and CacheMissReason types
+- *(transcripts)* Add AssistantMessage.diagnostics field
+- *(transcripts)* Add attributionAgent and attributionPlugin on AssistantEntry
+- *(transcripts)* Add attributionSkill on AssistantEntry
+- *(transcripts)* Add AgentListingDelta attachment variant
+- *(transcripts)* Add apiErrorStatus on AssistantEntry
+- *(transcripts)* Add AutoMode and AutoModeExit attachment variants
+- *(transcripts)* Add readdedNames on deferred_tools_delta attachment
+- *(transcripts)* Add imagePasteIds on queued_command attachment
+- *(transcripts)* Add PlanFileReference attachment variant
+- *(ingest)* Plumb api_error_status, plan_file_reference, readdedNames to DB
+
+### 🚜 Refactor
+
+- *(transcripts)* Generalize opt_nullable serde helper over T
+
+### ⚙️ Miscellaneous Tasks
+
+- Backfill v0.1.10 changelog section
+
 ## [0.1.10] - 2026-05-03
 
 ### ⚙️ Miscellaneous Tasks
