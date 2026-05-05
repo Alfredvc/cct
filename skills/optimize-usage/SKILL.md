@@ -179,7 +179,9 @@ Only after outliers are logged, run aggregate rollups (model, project, tool, sid
 For each anomaly, write a one-paragraph trace with **citations**:
 
 - **Origin.** Which skill, slash command, subagent, CLAUDE.md rule, MCP server, or hook produces it? Quote the specific CLAUDE.md line / skill path / JSONL entry_id / config file. "I don't know what creates this" = keep digging.
-- **Marginal cost per occurrence**, not just total. A 30k-token artifact ingested fresh into a subagent ≈ $0.56 cache-create per spawn on Opus. Total = marginal × frequency; know both.
+- **Marginal cost per occurrence**, not just total. Two regimes — pick the right one:
+  - **Spawn** (fresh ingestion, doesn't persist): cold-cache subagent, single tool result, one-off Read. A 30k-token artifact ≈ $0.56 cache-create per spawn on Opus. Cost = `cc × frequency`.
+  - **Lifecycle** (persistent in the session prefix): CLAUDE.md, MCP schemas, hook outputs in transcript, skill bodies, plans loaded mid-session. Pay cache-create once + cache-read on every later turn the prefix survives. Use the `cc + Σ_{T'>T} cr` SQL pattern in [`../cct-db/references/cumulative-cost-analysis.md`](../cct-db/references/cumulative-cost-analysis.md). Cache-read tail dominates 5–10× over cc alone; quoting only cc undercounts.
 - **Propagation.** Where does the artifact get re-ingested (subagents, reviewers, repeated Reads, compaction reincorporation)?
 - **Substitute.** Would a pointer (path + line numbers) do the same job at 1/10 the size? Smaller model? Batched work? See `references/behavior-vocabulary.md` for the action space.
 - **Currency.** Older data may implicate a skill the user uninstalled. Verify the cause appears in the **most recent active window**. Key the currency check on the *artifact pattern* (path glob, output shape), not the skill name — a user may still produce the same artifact via a different producer.
@@ -220,9 +222,21 @@ Risk:          <tagged: capability loss / quality loss / habit friction / revers
 Verify:        <exact probe to re-run in 7 days + expected direction of change>
 ```
 
-**Saving estimate formula (internal; report as %).**
+**Saving estimate formula (internal; report as %).** Pick the regime — spawn vs lifecycle, same split as Phase 3.
+
+**Spawn cost** (per-call savings — subagent prompt size, repeated `Read` of the same file, single Bash compression):
 ```
 raw_weekly_saving_usd = marginal_cost_per_occurrence × occurrences_in_recent_window
+```
+
+**Lifecycle cost** (persistent-injection savings — CLAUDE.md trim, MCP schema removal, hook-output gating, skill-body shrink):
+```
+raw_weekly_saving_usd = Σ_sessions_in_window ( cumulative_cost_of_trimmed_tokens_for_this_session )
+```
+The per-session cumulative term is the `cc + Σ cr` quantity from the SQL in [`../cct-db/references/cumulative-cost-analysis.md`](../cct-db/references/cumulative-cost-analysis.md) — set the injection event to the trimmed item, set `T` to the token reduction. Using the spawn formula on a persistent injection under-attributes by 5–10× because it omits the cache-read tail.
+
+Both regimes then:
+```
 adjusted              = raw_weekly_saving_usd × adoption_rate
 saving_percent        = 100 × adjusted / baseline_weekly_usd      ← this is what you present
 ```
@@ -345,6 +359,7 @@ If any of these thoughts surface, stop and recheck.
 - **"It's probably long sessions."** → that's from the archetype list, did you check the distribution and rule out fat-context?
 - **"User thinks X, data agrees, done."** → confirmation. Run the adversarial rebuttal.
 - **"Close enough on the numbers."** → deduped view? `message_id IS NOT NULL`?
+- **"CLAUDE.md / MCP server / hook output is N tokens, that's a small cc cost per session."** → cc-only quoting. Add the cache-read tail across all turns × all sessions in the window — `cc + Σ_{T'>T} cr` from `../cct-db/references/cumulative-cost-analysis.md`. Usually 5–10× the cc number for persistent injections.
 - **"The root cause is cache-boundary invalidation / cache-read tax / token-type X."** → mechanism, not recommendation. What does the user *do*? Consult `references/behavior-vocabulary.md`.
 - **"Pragmatic fix here would be…"** → stop. Over-simplifying. Re-check Phase 4.
 - **"Fascinating pattern in the data."** → fascination is a tell. Re-anchor on behavior.
