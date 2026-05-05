@@ -20,6 +20,10 @@ All notable changes to this project will be documented in this file.
 
 - Document cct update-notifier banner
 
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.10
+
 ## [0.1.9] - 2026-05-02
 
 ### 🚀 Features
