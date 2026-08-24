@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS entries (
     prompt_id               TEXT,
     is_meta                 BOOLEAN,
     forked_from_uuid        TEXT,
-    forked_from_session_id  TEXT
+    forked_from_session_id  TEXT,
+    session_kind            TEXT,
+    session_id_snake        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS model_pricing (
@@ -81,7 +83,15 @@ CREATE TABLE IF NOT EXISTS user_entries (
     is_compact_summary             BOOLEAN,
     is_visible_in_transcript_only  BOOLEAN,
     image_paste_ids                JSON,
-    plan_content                   TEXT
+    plan_content                   TEXT,
+    prompt_source                  TEXT,
+    classifier_meta_lines          TEXT,
+    interrupted_message_id         TEXT,
+    tool_denial_kind               TEXT,
+    queue_priority                 TEXT,
+    turn_companion                 BOOLEAN,
+    mcp_meta                       JSON,
+    user_feedback                  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS assistant_entries (
@@ -117,6 +127,13 @@ CREATE TABLE IF NOT EXISTS assistant_entries (
     attribution_skill               TEXT,
     cache_miss_reason_type          TEXT,
     cache_missed_input_tokens       BIGINT,
+    attribution_mcp_server          TEXT,
+    attribution_mcp_tool            TEXT,
+    effort                          TEXT,
+    thinking_tokens                 BIGINT,
+    is_aborted_mid_stream           BOOLEAN,
+    error_details                   TEXT,
+    quota_limits                    JSON,
     cost_per_tool_use DOUBLE GENERATED ALWAYS AS (cost_usd / NULLIF(tool_use_count, 0)) VIRTUAL
 );
 
@@ -149,7 +166,14 @@ CREATE TABLE IF NOT EXISTS system_entries (
     compact_preserved_head_uuid    TEXT,
     compact_preserved_anchor_uuid  TEXT,
     compact_preserved_tail_uuid    TEXT,
-    compact_pre_discovered_tools   JSON
+    compact_pre_discovered_tools   JSON,
+    hook_additional_context        JSON,
+    pending_background_agent_count INTEGER,
+    cron_kind                      TEXT,
+    compact_cumulative_dropped_tokens  BIGINT,
+    compact_preserved_msgs_anchor_uuid TEXT,
+    compact_preserved_msg_uuids        JSON,
+    compact_preserved_msg_all_uuids    JSON
 );
 
 CREATE TABLE IF NOT EXISTS attachment_entries (
@@ -200,7 +224,32 @@ CREATE TABLE IF NOT EXISTS attachment_entries (
     nested_memory_memory_type       TEXT,
     nested_memory_content           TEXT,
     nested_memory_differs_from_disk BOOLEAN,
-    deferred_readded_names          JSON
+    deferred_readded_names          JSON,
+    reminder_text                   TEXT,
+    truncation_banner               TEXT,
+    goal_met                        BOOLEAN,
+    goal_condition                  TEXT,
+    goal_sentinel                   BOOLEAN,
+    goal_reason                     TEXT,
+    goal_iterations                 INTEGER,
+    goal_duration_ms                BIGINT,
+    goal_tokens                     BIGINT,
+    task_id                         TEXT,
+    task_type                       TEXT,
+    task_description                TEXT,
+    task_status                     TEXT,
+    task_delta_summary              TEXT,
+    task_output_file_path           TEXT,
+    queued_command_timestamp        TIMESTAMP,
+    queued_command_origin           JSON,
+    queued_command_source_uuid      TEXT,
+    queued_command_is_meta          BOOLEAN,
+    deferred_pending_mcp_servers    JSON,
+    auto_mode_reminder_type         TEXT,
+    auto_mode_consent_flow          BOOLEAN,
+    auto_mode_bash_first            BOOLEAN,
+    auto_mode_steer_only            BOOLEAN,
+    auto_mode_bypass                BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS progress_entries (
@@ -275,7 +324,8 @@ CREATE TABLE IF NOT EXISTS system_hook_infos (
     entry_id        BIGINT,
     position        INTEGER,
     command         TEXT,
-    duration_ms     BIGINT);
+    duration_ms     BIGINT,
+    prompt_text     TEXT);
 
 CREATE TABLE IF NOT EXISTS attachment_diagnostics_files (
     entry_id        BIGINT,
@@ -436,6 +486,66 @@ CREATE TABLE IF NOT EXISTS speculation_accept_entries (
     timestamp       TIMESTAMP,
     time_saved_ms   BIGINT
 );
+
+CREATE TABLE IF NOT EXISTS atis_latch_entries (
+    entry_id    BIGINT ,
+    atis        TEXT,
+    session_id  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bridge_session_entries (
+    entry_id                BIGINT ,
+    session_id              TEXT,
+    bridge_session_id       TEXT,
+    last_sequence_num       BIGINT,
+    owner_account_uuid      TEXT,
+    owner_organization_uuid TEXT
+);
+
+CREATE TABLE IF NOT EXISTS file_history_delta_entries (
+    entry_id                BIGINT ,
+    message_id              TEXT,
+    snapshot_message_id     TEXT,
+    tracking_path           TEXT,
+    backup_file_name        TEXT,
+    backup_version          INTEGER,
+    backup_time             TIMESTAMP,
+    real_parent_dir         TEXT,
+    timestamp               TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS frame_link_entries (
+    entry_id        BIGINT ,
+    session_id      TEXT,
+    path            TEXT,
+    frame_url       TEXT,
+    title           TEXT,
+    artifact_count  INTEGER,
+    timestamp       TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS fork_context_ref_entries (
+    entry_id            BIGINT ,
+    agent_id            TEXT,
+    parent_session_id   TEXT,
+    parent_last_uuid    TEXT,
+    context_length      BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS artifact_autoreact_ledger_entries (
+    entry_id        BIGINT ,
+    ledger_version  INTEGER,
+    session_id      TEXT,
+    account_uuid    TEXT,
+    artifacts       JSON
+);
+
+CREATE TABLE IF NOT EXISTS artifact_comment_monitor_entries (
+    entry_id        BIGINT ,
+    state_version   INTEGER,
+    session_id      TEXT,
+    artifacts       JSON
+);
 "#;
 
 // Dedup table for billing-safe aggregation over assistant_entries.
@@ -563,6 +673,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_queue_operation_entries_pk             ON q
 CREATE UNIQUE INDEX IF NOT EXISTS uq_marble_origami_commit_entries_pk       ON marble_origami_commit_entries(entry_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_marble_origami_snapshot_entries_pk     ON marble_origami_snapshot_entries(entry_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_speculation_accept_entries_pk          ON speculation_accept_entries(entry_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_atis_latch_entries_pk                  ON atis_latch_entries(entry_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bridge_session_entries_pk              ON bridge_session_entries(entry_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_file_history_delta_entries_pk          ON file_history_delta_entries(entry_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_frame_link_entries_pk                  ON frame_link_entries(entry_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fork_context_ref_entries_pk            ON fork_context_ref_entries(entry_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_artifact_autoreact_ledger_entries_pk   ON artifact_autoreact_ledger_entries(entry_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_artifact_comment_monitor_entries_pk    ON artifact_comment_monitor_entries(entry_id);
 CREATE INDEX IF NOT EXISTS idx_entries_session_id    ON entries(session_id);
 CREATE INDEX IF NOT EXISTS idx_entries_timestamp     ON entries(timestamp);
 CREATE INDEX IF NOT EXISTS idx_entries_type          ON entries(type);
@@ -572,6 +689,8 @@ CREATE INDEX IF NOT EXISTS idx_assistant_model       ON assistant_entries(model)
 CREATE INDEX IF NOT EXISTS idx_assistant_cost        ON assistant_entries(cost_usd);
 CREATE INDEX IF NOT EXISTS idx_assistant_attribution_agent     ON assistant_entries(attribution_agent);
 CREATE INDEX IF NOT EXISTS idx_assistant_attribution_skill     ON assistant_entries(attribution_skill);
+CREATE INDEX IF NOT EXISTS idx_assistant_effort                ON assistant_entries(effort);
+CREATE INDEX IF NOT EXISTS idx_entries_session_kind            ON entries(session_kind);
 CREATE INDEX IF NOT EXISTS idx_assistant_cache_miss_reason     ON assistant_entries(cache_miss_reason_type);
 CREATE INDEX IF NOT EXISTS idx_assistant_block_tool  ON assistant_content_blocks(tool_name);
 CREATE INDEX IF NOT EXISTS idx_attachment_type       ON attachment_entries(attachment_type);
@@ -644,6 +763,19 @@ COMMENT ON COLUMN queue_operation_entries.entry_id          IS '→ entries(entr
 COMMENT ON COLUMN marble_origami_commit_entries.entry_id    IS '→ entries(entry_id)';
 COMMENT ON COLUMN marble_origami_snapshot_entries.entry_id  IS '→ entries(entry_id)';
 COMMENT ON COLUMN speculation_accept_entries.entry_id       IS '→ entries(entry_id)';
+COMMENT ON COLUMN atis_latch_entries.entry_id               IS '→ entries(entry_id)';
+COMMENT ON COLUMN bridge_session_entries.entry_id           IS '→ entries(entry_id)';
+COMMENT ON COLUMN file_history_delta_entries.entry_id       IS '→ entries(entry_id)';
+COMMENT ON COLUMN frame_link_entries.entry_id               IS '→ entries(entry_id)';
+COMMENT ON COLUMN fork_context_ref_entries.entry_id         IS '→ entries(entry_id)';
+COMMENT ON COLUMN artifact_autoreact_ledger_entries.entry_id   IS '→ entries(entry_id)';
+COMMENT ON COLUMN artifact_comment_monitor_entries.entry_id    IS '→ entries(entry_id)';
+
+-- ── envelope columns added by newer Claude Code versions ─────────────────
+COMMENT ON COLUMN entries.session_kind IS
+'Session flavour when not a plain foreground session — ''bg'' for background sessions. NULL on ordinary interactive sessions and on every entry written by a client too old to emit it.';
+COMMENT ON COLUMN entries.session_id_snake IS
+'Snake-case `session_id` field newer clients write alongside `sessionId`. Usually equal to entries.session_id but NOT always (observed to diverge on resumed sessions, where it keeps the originating session''s id). NULL on older transcripts. Join on entries.session_id, not this column.';
 
 -- ── soft references ───────────────────────────────────────────────────────
 COMMENT ON COLUMN assistant_entries.model IS '~ model_pricing(model) [soft: unknown models allowed]';
@@ -682,6 +814,20 @@ COMMENT ON COLUMN assistant_entries.stop_reason IS
 'Set only on the final entry of a streaming response (the one that received message_delta). Used as the primary dedup tiebreaker — rows with stop_reason set are the authoritative billing record.';
 COMMENT ON COLUMN assistant_entries.is_api_error_message IS
 'TRUE = synthetic error surfaced to the user, not a real API response. Paired with message_id IS NULL and model = ''<synthetic>''. Never billed — exclude from cost aggregation.';
+COMMENT ON COLUMN assistant_entries.effort IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped for distributions. Reasoning effort the turn ran at (medium / high / xhigh …). NULL on transcripts from clients that predate the field.';
+COMMENT ON COLUMN assistant_entries.thinking_tokens IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped. Extended-thinking share of output_tokens (message.usage.output_tokens_details.thinking_tokens) — already included in output_tokens, so never add the two. NULL when the API did not report the breakdown.';
+COMMENT ON COLUMN assistant_entries.attribution_mcp_server IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped. MCP server that served the tool call attributed to this turn, e.g. plugin:context7:context7. NULL when the turn used no MCP tool.';
+COMMENT ON COLUMN assistant_entries.attribution_mcp_tool IS
+'⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped. Server-local MCP tool name (un-prefixed). Pairs with attribution_mcp_server.';
+COMMENT ON COLUMN assistant_entries.is_aborted_mid_stream IS
+'TRUE = the response stream was cut off mid-flight (user interrupt or transport failure). Usage figures on such rows are partial.';
+COMMENT ON COLUMN assistant_entries.error_details IS
+'Raw error body from the API for a failed turn (status line + JSON). Companion to the short `error` slug.';
+COMMENT ON COLUMN assistant_entries.quota_limits IS
+'Rate-limit / quota snapshot the API attached when it throttled or rejected the request. JSON: status, resetsAt (unix seconds), rateLimitType, overageStatus, overageDisabledReason, isUsingOverage, unifiedRateLimitFallbackAvailable, upgradePaths.';
 COMMENT ON COLUMN assistant_entries.api_error_status IS
 '⚠ DO NOT GROUP BY on raw. Duplicated across content blocks. Use assistant_entries_deduped for distributions. HTTP status code (e.g. 401, 429, 400, 403) returned by the API when the turn errored. Populated alongside error / is_api_error_message on failed turns; NULL on successful turns.';
 "#;

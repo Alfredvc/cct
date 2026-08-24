@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -5,6 +7,12 @@ use serde_json::Value;
 // Top-level Entry — one per JSONL line
 // ---------------------------------------------------------------------------
 
+// AssistantEntry / SystemEntry are wide by nature (one flat struct per
+// transcript shape). Boxing them would shrink the enum but break the public
+// API of this published crate, and entries are parsed and consumed one line at
+// a time — the enum is never held in a large collection — so the size costs
+// nothing in practice.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Entry {
@@ -85,6 +93,27 @@ pub enum Entry {
     #[serde(rename = "speculation-accept")]
     SpeculationAccept(SpeculationAcceptEntry),
 
+    #[serde(rename = "atis-latch")]
+    AtisLatch(AtisLatchEntry),
+
+    #[serde(rename = "bridge-session")]
+    BridgeSession(BridgeSessionEntry),
+
+    #[serde(rename = "file-history-delta")]
+    FileHistoryDelta(FileHistoryDeltaEntry),
+
+    #[serde(rename = "frame-link")]
+    FrameLink(FrameLinkEntry),
+
+    #[serde(rename = "fork-context-ref")]
+    ForkContextRef(ForkContextRefEntry),
+
+    #[serde(rename = "artifact-autoreact-ledger")]
+    ArtifactAutoreactLedger(ArtifactAutoreactLedgerEntry),
+
+    #[serde(rename = "artifact-comment-monitor")]
+    ArtifactCommentMonitor(ArtifactCommentMonitorEntry),
+
     /// Catch-all for entry types not yet recognised by the ingest binary.
     /// Allows forward-compatible parsing: new Claude Code entry types in
     /// the JSONL will be silently skipped rather than aborting ingest.
@@ -160,6 +189,18 @@ pub struct Envelope {
     /// Set when this session was forked from another session.
     #[serde(rename = "forkedFrom", skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<ForkedFrom>,
+
+    /// Snake-case session id emitted alongside `sessionId` by newer clients.
+    /// Usually identical to `session_id`, but the two do diverge (observed on
+    /// resumed sessions, where `session_id` keeps the originating id), so it
+    /// is kept as its own field rather than aliased onto `sessionId`.
+    #[serde(rename = "session_id", skip_serializing_if = "Option::is_none")]
+    pub session_id_snake: Option<String>,
+
+    /// Session flavour when not a plain foreground session — e.g. "bg" for
+    /// background sessions. Absent on ordinary interactive sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +256,50 @@ pub struct UserEntry {
 
     #[serde(rename = "planContent", skip_serializing_if = "Option::is_none")]
     pub plan_content: Option<String>,
+
+    /// How the prompt reached the session: "typed" | "system" | "queued" |
+    /// "suggestion_accepted". Present on real user-prompt entries only.
+    #[serde(rename = "promptSource", skip_serializing_if = "Option::is_none")]
+    pub prompt_source: Option<String>,
+
+    /// Newline-terminated JSON blob of classifier metadata attached to the
+    /// prompt (e.g. `{"meta":{"gitStatus":{…}}}`).
+    #[serde(
+        rename = "classifierMetaLines",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub classifier_meta_lines: Option<String>,
+
+    /// API message id of the assistant turn that this entry interrupted.
+    #[serde(
+        rename = "interruptedMessageId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub interrupted_message_id: Option<String>,
+
+    /// Why a tool call was denied: "user-rejected" | "automode-blocked" |
+    /// "automode-unavailable".
+    #[serde(rename = "toolDenialKind", skip_serializing_if = "Option::is_none")]
+    pub tool_denial_kind: Option<String>,
+
+    /// Queue placement for a prompt submitted while the turn was running,
+    /// e.g. "later".
+    #[serde(rename = "queuePriority", skip_serializing_if = "Option::is_none")]
+    pub queue_priority: Option<String>,
+
+    /// True when this entry accompanies the turn rather than driving it.
+    #[serde(rename = "turnCompanion", skip_serializing_if = "Option::is_none")]
+    pub turn_companion: Option<bool>,
+
+    /// MCP `_meta` envelope forwarded with an MCP tool result. Shape is
+    /// defined by the MCP spec / the server, so it is kept opaque.
+    #[serde(rename = "mcpMeta", skip_serializing_if = "Option::is_none")]
+    pub mcp_meta: Option<Value>,
+
+    /// Harness-authored instructions injected as user feedback (e.g. when the
+    /// user asks to clarify an AskUserQuestion prompt).
+    #[serde(rename = "userFeedback", skip_serializing_if = "Option::is_none")]
+    pub user_feedback: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -349,6 +434,65 @@ pub struct AssistantEntry {
     /// Absent when no skill is active for this turn.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attribution_skill: Option<String>,
+
+    /// MCP server that served the tool call attributed to this turn, e.g.
+    /// "plugin:context7:context7". Paired with `attribution_mcp_tool`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution_mcp_server: Option<String>,
+
+    /// MCP tool name (server-local, un-prefixed) invoked on this turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution_mcp_tool: Option<String>,
+
+    /// Reasoning effort the turn ran at: "medium" | "high" | "xhigh" (and the
+    /// other tiers the client offers). Absent on older transcripts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+
+    /// Rate-limit / quota snapshot attached when the API rejected or throttled
+    /// the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_limits: Option<QuotaLimits>,
+
+    /// True when the response stream was cut off mid-flight (user interrupt or
+    /// transport failure) rather than completing.
+    #[serde(rename = "isAbortedMidStream", skip_serializing_if = "Option::is_none")]
+    pub is_aborted_mid_stream: Option<bool>,
+
+    /// Raw error body from the API for a failed turn (status line + JSON).
+    /// Companion to the short `error` slug.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_details: Option<String>,
+}
+
+/// Quota / rate-limit state reported by the API on a throttled or rejected
+/// turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaLimits {
+    /// e.g. "rejected" | "allowed".
+    pub status: String,
+
+    /// Unix seconds at which the limit window resets.
+    pub resets_at: u64,
+
+    pub unified_rate_limit_fallback_available: bool,
+
+    /// Window the limit applies to, e.g. "five_hour".
+    pub rate_limit_type: String,
+
+    /// Overage state, e.g. "rejected".
+    pub overage_status: String,
+
+    /// Why overage was unavailable, e.g. "org_level_disabled".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overage_disabled_reason: Option<String>,
+
+    pub is_using_overage: bool,
+
+    /// Upgrade routes offered to the user, e.g. ["upgrade_plan"].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upgrade_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -505,6 +649,23 @@ pub struct AssistantUsage {
         with = "opt_nullable"
     )]
     pub speed: Option<Option<Value>>,
+
+    /// Breakdown of `output_tokens`; currently carries the thinking-token
+    /// share of the completion. null = present as JSON null; absent = field
+    /// not present.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_nullable"
+    )]
+    pub output_tokens_details: Option<Option<OutputTokensDetails>>,
+}
+
+// Snake-case to match the API payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputTokensDetails {
+    /// Extended-thinking tokens included in `output_tokens`.
+    pub thinking_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -628,6 +789,26 @@ pub struct SystemEntry {
     // ── compact_boundary ────────────────────────────────────────────────
     #[serde(rename = "compactMetadata", skip_serializing_if = "Option::is_none")]
     pub compact_metadata: Option<CompactMetadata>,
+
+    /// Context strings hooks contributed on this event. Empty in every
+    /// observed `stop_hook_summary`; element shape is hook-defined.
+    #[serde(
+        rename = "hookAdditionalContext",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hook_additional_context: Option<Vec<Value>>,
+
+    /// Background agents still running when the turn ended.
+    #[serde(
+        rename = "pendingBackgroundAgentCount",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pending_background_agent_count: Option<u32>,
+
+    /// Set on `scheduled_task_fire` entries to say which scheduler fired the
+    /// turn, e.g. "loop".
+    #[serde(rename = "cronKind", skip_serializing_if = "Option::is_none")]
+    pub cron_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -655,6 +836,10 @@ pub struct HookInfo {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+
+    /// Prompt text the hook injected (goal-condition hooks and friends).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -682,6 +867,29 @@ pub struct CompactMetadata {
         skip_serializing_if = "Option::is_none"
     )]
     pub pre_compact_discovered_tools: Option<Vec<String>>,
+
+    /// Tokens dropped by every compaction in this session so far, including
+    /// this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_dropped_tokens: Option<u64>,
+
+    /// Explicit uuid list of the messages carried across the boundary — the
+    /// enumerated form of `preserved_segment`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preserved_messages: Option<PreservedMessages>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreservedMessages {
+    /// Uuid of the anchor message the preserved window is centred on.
+    pub anchor_uuid: String,
+
+    /// Uuids kept in the post-compaction context.
+    pub uuids: Vec<String>,
+
+    /// Uuids considered for preservation, including ones ultimately dropped.
+    pub all_uuids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -802,11 +1010,35 @@ pub enum AttachmentData {
 
     // ── Auto mode ────────────────────────────────────────────────────────
     AutoMode {
-        #[serde(rename = "reminderType")]
-        reminder_type: String,
+        /// Reminder verbosity on older clients; newer ones describe the mode
+        /// through the flags below instead.
+        #[serde(rename = "reminderType", skip_serializing_if = "Option::is_none")]
+        reminder_type: Option<String>,
+        /// True while the client is still walking the user through the auto
+        /// mode consent flow.
+        #[serde(
+            rename = "autoModeConsentFlow",
+            skip_serializing_if = "Option::is_none"
+        )]
+        auto_mode_consent_flow: Option<bool>,
+        /// Auto mode is steering work through Bash rather than the dedicated
+        /// file tools.
+        #[serde(rename = "bashFirst", skip_serializing_if = "Option::is_none")]
+        bash_first: Option<bool>,
+        /// Auto mode only steers; it does not grant extra permissions.
+        #[serde(rename = "steerOnly", skip_serializing_if = "Option::is_none")]
+        steer_only: Option<bool>,
+        /// Permission prompts are bypassed for this run.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bypass: Option<bool>,
     },
 
-    AutoModeExit,
+    AutoModeExit {
+        #[serde(rename = "bashFirst", skip_serializing_if = "Option::is_none")]
+        bash_first: Option<bool>,
+        #[serde(rename = "steerOnly", skip_serializing_if = "Option::is_none")]
+        steer_only: Option<bool>,
+    },
 
     // ── Plan file reference ─────────────────────────────────────────────
     /// Snapshot of a plan markdown file pinned to the conversation. Carries
@@ -827,6 +1059,9 @@ pub enum AttachmentData {
         /// Total number of skills listed.
         #[serde(rename = "skillCount", skip_serializing_if = "Option::is_none")]
         skill_count: Option<u32>,
+        /// Slugs of the listed skills, parallel to the rendered `content`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        names: Option<Vec<String>>,
     },
 
     DynamicSkill {
@@ -884,6 +1119,10 @@ pub enum AttachmentData {
         /// turn. Disjoint from `addedNames` (which lists newly-added tools).
         #[serde(rename = "readdedNames", skip_serializing_if = "Option::is_none")]
         readded_names: Option<Vec<String>>,
+        /// MCP servers whose tool lists had not arrived yet when the delta was
+        /// emitted. Empty in every observed payload.
+        #[serde(rename = "pendingMcpServers", skip_serializing_if = "Option::is_none")]
+        pending_mcp_servers: Option<Vec<Value>>,
     },
 
     McpInstructionsDelta {
@@ -932,6 +1171,19 @@ pub enum AttachmentData {
         /// the same name on `UserEntry`.
         #[serde(rename = "imagePasteIds", skip_serializing_if = "Option::is_none")]
         image_paste_ids: Option<Vec<u64>>,
+        /// When the command was queued.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
+        /// Where the queued prompt came from, e.g. `{"kind":"human"}`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin: Option<Value>,
+        /// Uuid of the entry this queued command was lifted from. Snake-case
+        /// in the payload, unlike its camelCase siblings.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_uuid: Option<String>,
+        /// True when the queued command should stay hidden in the UI.
+        #[serde(rename = "isMeta", skip_serializing_if = "Option::is_none")]
+        is_meta: Option<bool>,
     },
 
     // ── Nested memory (CLAUDE.md imports) ────────────────────────────────
@@ -940,6 +1192,69 @@ pub enum AttachmentData {
         content: NestedMemoryContent,
         #[serde(rename = "displayPath")]
         display_path: String,
+    },
+
+    // ── Context budget ───────────────────────────────────────────────────
+    /// Remaining-token reminder injected into the conversation, e.g.
+    /// `<total_tokens>15000000 tokens left</total_tokens>`.
+    TotalTokensReminder {
+        text: String,
+    },
+
+    // ── Tool output truncation ───────────────────────────────────────────
+    /// Banner appended when a Read returned only part of a file.
+    ReadTruncationNotice {
+        banner: String,
+        #[serde(rename = "toolUseID")]
+        tool_use_id: String,
+    },
+
+    // ── Goal / stop conditions ───────────────────────────────────────────
+    /// Verdict of the stop-condition checker for a `/loop`-style goal.
+    GoalStatus {
+        /// Whether the stop condition is considered met.
+        met: bool,
+        /// The user-supplied stopping condition being evaluated.
+        condition: String,
+        /// True when the checker ran as the sentinel pass.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sentinel: Option<bool>,
+        /// Checker's rationale for the verdict.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// Loop iterations executed so far.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        iterations: Option<u32>,
+        /// Wall-clock spent in the loop.
+        #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        /// Tokens spent in the loop.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tokens: Option<u64>,
+    },
+
+    // ── Background tasks ─────────────────────────────────────────────────
+    /// Status update for a background task (subagent, workflow, cloud run).
+    TaskStatus {
+        #[serde(rename = "taskId")]
+        task_id: String,
+        /// e.g. "local_agent".
+        #[serde(rename = "taskType")]
+        task_type: String,
+        description: String,
+        /// e.g. "running" | "completed".
+        status: String,
+        /// One-line summary of what changed since the last update; null when
+        /// there is nothing new to report.
+        #[serde(
+            rename = "deltaSummary",
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "opt_nullable"
+        )]
+        delta_summary: Option<Option<String>>,
+        #[serde(rename = "outputFilePath")]
+        output_file_path: String,
     },
 
     /// Catch-all for attachment types not yet recognised by the ingest binary.
@@ -1007,6 +1322,37 @@ pub struct FileData {
     pub start_line: Option<u64>,
     #[serde(rename = "totalLines", skip_serializing_if = "Option::is_none")]
     pub total_lines: Option<u64>,
+
+    /// Present instead of `content` when the attached file is a Jupyter
+    /// notebook.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cells: Option<Vec<NotebookCell>>,
+}
+
+/// One cell of an attached Jupyter notebook. Field casing is mixed in the
+/// payload (`cellType` but `cell_id` / `execution_count`), so each key is
+/// renamed explicitly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotebookCell {
+    /// "code" | "markdown".
+    #[serde(rename = "cellType")]
+    pub cell_type: String,
+
+    pub cell_id: String,
+
+    /// Cell language, e.g. "python".
+    pub language: String,
+
+    pub source: String,
+
+    /// Execution counter; absent on markdown and never-run cells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_count: Option<i64>,
+
+    /// Rendered outputs. Shape follows the nbformat spec (`output_type` plus
+    /// type-dependent keys), so entries are kept opaque.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1385,6 +1731,184 @@ pub struct SpeculationAcceptEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Session-scoped state entries
+// ---------------------------------------------------------------------------
+
+/// Latched ATIS (the short status string the client replays on resume).
+/// Empty in every observed payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AtisLatchEntry {
+    pub atis: String,
+    pub session_id: String,
+}
+
+/// Link between a local session and the cloud bridge session backing it
+/// (`/bridge`, Claude Code on the web).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeSessionEntry {
+    pub session_id: String,
+
+    /// Server-side session id, e.g. "cse_012oGoLjZDXydUaR4QRuqhk5".
+    pub bridge_session_id: String,
+
+    /// Highest bridge event sequence number acknowledged so far.
+    pub last_sequence_num: u64,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_account_uuid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_organization_uuid: Option<String>,
+}
+
+/// Incremental file-history record: one tracked file backed up at one message.
+/// Companion to the full `file-history-snapshot`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHistoryDeltaEntry {
+    /// Entry uuid this delta belongs to.
+    pub message_id: String,
+
+    /// Uuid of the snapshot this delta extends.
+    pub snapshot_message_id: String,
+
+    /// Path as tracked, relative to the backup's `real_parent_dir`.
+    pub tracking_path: String,
+
+    pub backup: FileHistoryBackup,
+
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHistoryBackup {
+    /// Name of the backup blob, e.g. "16fd0df0a36513cf@v1"; null when the file
+    /// did not exist at backup time.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_nullable"
+    )]
+    pub backup_file_name: Option<Option<String>>,
+
+    pub version: u32,
+
+    pub backup_time: String,
+
+    /// Absolute directory `tracking_path` is relative to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub real_parent_dir: Option<String>,
+}
+
+/// Artifact / frame the session published, as surfaced in the client UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameLinkEntry {
+    pub session_id: String,
+    pub timestamp: String,
+
+    /// Local file that was published.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+
+    /// Hosted URL of the published artifact.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_url: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+
+    /// Number of artifacts published in the session so far.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_count: Option<u32>,
+}
+
+/// Written at the head of a forked subagent transcript: where the fork's
+/// inherited context came from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkContextRefEntry {
+    pub agent_id: String,
+    pub parent_session_id: String,
+
+    /// Last entry of the parent session included in the fork.
+    pub parent_last_uuid: String,
+
+    /// Number of parent entries carried into the fork.
+    pub context_length: u64,
+}
+
+/// Per-session ledger of artifacts the session auto-reacts to (republishes
+/// and comment threads it is watching).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactAutoreactLedgerEntry {
+    /// Ledger format version.
+    pub v: u32,
+    pub session_id: String,
+    pub account_uuid: String,
+
+    /// Keyed by artifact uuid.
+    pub artifacts: HashMap<String, ArtifactAutoreactState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactAutoreactState {
+    /// Unix milliseconds of the last save.
+    pub saved_at: u64,
+
+    /// Highest comment stamp already reacted to; null until one is seen.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_nullable"
+    )]
+    pub stamp_high_water: Option<Option<Value>>,
+
+    pub ever_baselined: bool,
+
+    pub ever_had_threads: bool,
+
+    /// Unix milliseconds of turns that touched the artifact.
+    pub turn_timestamps: Vec<Value>,
+
+    /// Comment threads tracked for this artifact.
+    pub threads: Vec<Value>,
+
+    /// True when auto-reaction was interrupted by the user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interrupted: Option<bool>,
+}
+
+/// Per-session state of the artifact comment watcher.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactCommentMonitorEntry {
+    /// State format version.
+    pub v: u32,
+    pub session_id: String,
+
+    /// Keyed by artifact uuid.
+    pub artifacts: HashMap<String, ArtifactCommentMonitorState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactCommentMonitorState {
+    /// e.g. "armed".
+    pub state: String,
+
+    /// Unix milliseconds the state was written.
+    pub written_at_ms: u64,
+
+    pub title: String,
+}
+
+// ---------------------------------------------------------------------------
 // Serde helper: distinguish JSON null from absent field
 //
 // Used with:
@@ -1718,6 +2242,270 @@ mod tests {
         let original: serde_json::Value = serde_json::from_str(json).unwrap();
         let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
         assert_eq!(roundtripped, original);
+    }
+}
+
+#[cfg(test)]
+mod format_2026_08_tests {
+    use super::*;
+
+    /// Parse, re-serialise, and assert the JSON is byte-for-byte equivalent.
+    fn rt(json: &str) {
+        let v: Entry = serde_json::from_str(json).expect("parse");
+        let back = serde_json::to_string(&v).expect("serialize");
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        let roundtripped: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(roundtripped, original);
+    }
+
+    const ENV: &str = r#""uuid":"u1","parentUuid":null,"isSidechain":false,"sessionId":"s1","timestamp":"2026-08-20T15:12:33.674Z""#;
+
+    // ── Envelope additions ───────────────────────────────────────────────
+
+    #[test]
+    fn envelope_session_kind_and_snake_session_id_round_trip() {
+        rt(&format!(
+            r#"{{{ENV},"session_id":"s0","sessionKind":"bg","type":"user","message":{{"role":"user","content":"hi"}}}}"#
+        ));
+    }
+
+    /// The snake-case `session_id` is a distinct field, not an alias: it can
+    /// hold a different id from `sessionId` on resumed sessions.
+    #[test]
+    fn snake_session_id_does_not_collide_with_camel() {
+        let json = format!(
+            r#"{{{ENV},"session_id":"s0","type":"user","message":{{"role":"user","content":"hi"}}}}"#
+        );
+        match serde_json::from_str::<Entry>(&json).unwrap() {
+            Entry::User(u) => {
+                assert_eq!(u.envelope.session_id, "s1");
+                assert_eq!(u.envelope.session_id_snake.as_deref(), Some("s0"));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    // ── Assistant additions ──────────────────────────────────────────────
+
+    #[test]
+    fn assistant_effort_mcp_attribution_and_thinking_tokens_round_trip() {
+        rt(&format!(
+            r#"{{{ENV},"type":"assistant","effort":"xhigh","attributionMcpServer":"plugin:context7:context7","attributionMcpTool":"resolve-library-id","message":{{"id":"m1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{{"input_tokens":1,"output_tokens":9,"output_tokens_details":{{"thinking_tokens":4}}}}}}}}"#
+        ));
+    }
+
+    /// `output_tokens_details: null` is common in the wild and must survive as
+    /// null rather than being dropped.
+    #[test]
+    fn assistant_null_output_tokens_details_round_trips_as_null() {
+        rt(&format!(
+            r#"{{{ENV},"type":"assistant","message":{{"id":"m1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{{"input_tokens":1,"output_tokens":1,"output_tokens_details":null}}}}}}"#
+        ));
+    }
+
+    #[test]
+    fn assistant_quota_limits_and_abort_fields_round_trip() {
+        rt(&format!(
+            r#"{{{ENV},"type":"assistant","isAbortedMidStream":true,"errorDetails":"429 {{\"type\":\"error\"}}","quotaLimits":{{"status":"rejected","resetsAt":1787244600,"unifiedRateLimitFallbackAvailable":false,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false,"upgradePaths":["upgrade_plan"]}},"message":{{"id":"m1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ));
+    }
+
+    // ── User additions ───────────────────────────────────────────────────
+
+    #[test]
+    fn user_prompt_metadata_fields_round_trip() {
+        rt(&format!(
+            r#"{{{ENV},"type":"user","promptSource":"typed","queuePriority":"later","turnCompanion":true,"toolDenialKind":"user-rejected","interruptedMessageId":"msg_1","classifierMetaLines":"{{\"meta\":{{}}}}\n","userFeedback":"clarify","mcpMeta":{{"_meta":{{"io.modelcontextprotocol/serverInfo":{{"name":"Context7"}}}}}},"message":{{"role":"user","content":"hi"}}}}"#
+        ));
+    }
+
+    // ── System additions ─────────────────────────────────────────────────
+
+    #[test]
+    fn system_compact_preserved_messages_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"system","subtype":"compact_boundary","compactMetadata":{{"trigger":"auto","preTokens":10,"postTokens":2,"cumulativeDroppedTokens":8,"durationMs":5,"preservedSegment":{{"headUuid":"h","anchorUuid":"a","tailUuid":"t"}},"preservedMessages":{{"anchorUuid":"a","uuids":["h","t"],"allUuids":["h","x","t"]}}}}}}"#
+        ));
+    }
+
+    #[test]
+    fn system_stop_hook_summary_extras_round_trip() {
+        rt(&format!(
+            r#"{{{ENV},"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{{"command":"sh hook.sh","durationMs":12,"promptText":"keep going"}}],"hookAdditionalContext":[],"pendingBackgroundAgentCount":6}}"#
+        ));
+    }
+
+    #[test]
+    fn system_cron_kind_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"system","subtype":"scheduled_task_fire","cronKind":"loop"}}"#
+        ));
+    }
+
+    // ── Attachment variants ──────────────────────────────────────────────
+
+    #[test]
+    fn attachment_total_tokens_reminder_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"total_tokens_reminder","text":"<total_tokens>15000000 tokens left</total_tokens>"}}}}"#
+        ));
+    }
+
+    #[test]
+    fn attachment_read_truncation_notice_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"read_truncation_notice","banner":"[Truncated: PARTIAL view]","toolUseID":"toolu_1"}}}}"#
+        ));
+    }
+
+    #[test]
+    fn attachment_goal_status_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"goal_status","met":false,"condition":"keep going","sentinel":true,"reason":"still running","iterations":2,"durationMs":9390812,"tokens":806003}}}}"#
+        ));
+    }
+
+    /// `deltaSummary` is always present and may be null — it must round-trip as
+    /// null rather than being dropped.
+    #[test]
+    fn attachment_task_status_round_trips_with_null_delta_summary() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"task_status","taskId":"a1","taskType":"local_agent","description":"Fix contracts","status":"running","deltaSummary":null,"outputFilePath":"/tmp/a1.output"}}}}"#
+        ));
+    }
+
+    /// Newer clients describe auto mode through flags and omit `reminderType`
+    /// entirely; older ones sent only `reminderType`.
+    #[test]
+    fn attachment_auto_mode_flag_shape_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"auto_mode","autoModeConsentFlow":false,"bashFirst":true,"steerOnly":true,"bypass":false}}}}"#
+        ));
+    }
+
+    #[test]
+    fn attachment_auto_mode_exit_with_flags_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"auto_mode_exit","bashFirst":true,"steerOnly":true}}}}"#
+        ));
+    }
+
+    #[test]
+    fn attachment_queued_command_extras_round_trip() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"queued_command","prompt":"go","commandMode":"prompt","timestamp":"2026-08-20T15:32:26.583Z","origin":{{"kind":"human"}},"source_uuid":"u0","isMeta":true}}}}"#
+        ));
+    }
+
+    #[test]
+    fn attachment_skill_listing_names_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"skill_listing","content":"- a: x","skillCount":1,"isInitial":true,"names":["a"]}}}}"#
+        ));
+    }
+
+    #[test]
+    fn attachment_deferred_tools_delta_pending_mcp_servers_round_trips() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"deferred_tools_delta","addedNames":["A"],"addedLines":["A"],"removedNames":[],"readdedNames":[],"pendingMcpServers":[]}}}}"#
+        ));
+    }
+
+    #[test]
+    fn attachment_notebook_file_cells_round_trip() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"file","filename":"/n.ipynb","content":{{"type":"text","file":{{"filePath":"/n.ipynb","cells":[{{"cellType":"code","cell_id":"c1","language":"python","source":"x=1","execution_count":1,"outputs":[{{"output_type":"error","text":"boom"}}]}},{{"cellType":"markdown","cell_id":"c2","language":"markdown","source":"hi"}}]}}}},"displayPath":"n.ipynb"}}}}"#
+        ));
+    }
+
+    // ── New top-level entry types ────────────────────────────────────────
+
+    #[test]
+    fn atis_latch_round_trips() {
+        rt(r#"{"type":"atis-latch","atis":"","sessionId":"s1"}"#);
+    }
+
+    #[test]
+    fn bridge_session_round_trips() {
+        rt(
+            r#"{"type":"bridge-session","sessionId":"s1","bridgeSessionId":"cse_1","lastSequenceNum":0,"ownerAccountUuid":"a1","ownerOrganizationUuid":"o1"}"#,
+        );
+    }
+
+    #[test]
+    fn bridge_session_without_owner_uuids_round_trips() {
+        rt(
+            r#"{"type":"bridge-session","sessionId":"s1","bridgeSessionId":"cse_1","lastSequenceNum":3}"#,
+        );
+    }
+
+    /// `backupFileName` is null when the tracked file did not exist yet.
+    #[test]
+    fn file_history_delta_round_trips_with_null_backup_name() {
+        rt(
+            r#"{"type":"file-history-delta","messageId":"m1","snapshotMessageId":"m0","trackingPath":"a.py","backup":{"backupFileName":null,"version":1,"backupTime":"2026-08-23T16:51:45.058Z","realParentDir":"/src"},"timestamp":"2026-08-23T16:51:45.058Z"}"#,
+        );
+    }
+
+    #[test]
+    fn frame_link_round_trips() {
+        rt(
+            r#"{"type":"frame-link","sessionId":"s1","timestamp":"2026-08-23T11:03:16.000Z","path":"/tmp/a.html","frameUrl":"https://claude.ai/code/artifact/x","title":"T","artifactCount":1}"#,
+        );
+    }
+
+    /// Heartbeat rows carry only the session id and timestamp.
+    #[test]
+    fn frame_link_minimal_round_trips() {
+        rt(r#"{"type":"frame-link","sessionId":"s1","timestamp":"2026-08-23T11:12:03.314Z"}"#);
+    }
+
+    #[test]
+    fn fork_context_ref_round_trips() {
+        rt(
+            r#"{"type":"fork-context-ref","agentId":"abt4","parentSessionId":"s0","parentLastUuid":"u0","contextLength":500}"#,
+        );
+    }
+
+    #[test]
+    fn artifact_autoreact_ledger_round_trips() {
+        rt(
+            r#"{"type":"artifact-autoreact-ledger","v":1,"sessionId":"s1","accountUuid":"a1","artifacts":{"art1":{"savedAt":1787486401550,"stampHighWater":null,"everBaselined":true,"everHadThreads":false,"turnTimestamps":[],"threads":[],"interrupted":true}}}"#,
+        );
+    }
+
+    #[test]
+    fn artifact_comment_monitor_round_trips() {
+        rt(
+            r#"{"type":"artifact-comment-monitor","v":1,"sessionId":"s1","artifacts":{"art1":{"state":"armed","writtenAtMs":1787483938784,"title":"T"}}}"#,
+        );
+    }
+
+    // ── Absent (not null) nullable fields ────────────────────────────────
+    //
+    // Every `opt_nullable` field must also carry `skip_serializing_if`, or an
+    // absent key deserialises to the outer `None` that `serialize` treats as
+    // unreachable. These three cover the fields added in this batch.
+
+    #[test]
+    fn attachment_task_status_round_trips_without_delta_summary() {
+        rt(&format!(
+            r#"{{{ENV},"type":"attachment","attachment":{{"type":"task_status","taskId":"a1","taskType":"local_agent","description":"Fix contracts","status":"running","outputFilePath":"/tmp/a1.output"}}}}"#
+        ));
+    }
+
+    #[test]
+    fn file_history_delta_round_trips_without_backup_name() {
+        rt(
+            r#"{"type":"file-history-delta","messageId":"m1","snapshotMessageId":"m0","trackingPath":"a.py","backup":{"version":1,"backupTime":"2026-08-23T16:51:45.058Z"},"timestamp":"2026-08-23T16:51:45.058Z"}"#,
+        );
+    }
+
+    #[test]
+    fn artifact_autoreact_ledger_round_trips_without_stamp_high_water() {
+        rt(
+            r#"{"type":"artifact-autoreact-ledger","v":1,"sessionId":"s1","accountUuid":"a1","artifacts":{"art1":{"savedAt":1787486401550,"everBaselined":true,"everHadThreads":false,"turnTimestamps":[],"threads":[],"interrupted":true}}}"#,
+        );
     }
 }
 

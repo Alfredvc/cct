@@ -1,5 +1,6 @@
 ---
 name: cct-db
+disable-model-invocation: true
 description: Query the local DuckDB of ingested Claude Code transcripts (`~/.local/share/cct/transcripts.duckdb` by default, or `$XDG_DATA_HOME/cct/transcripts.duckdb`) to answer any question about sessions, costs, tokens, tools, models, cache hits, subagents, skills invoked, permission modes, or raw conversation data. Use this skill whenever the user wants to run SQL against that DB or asks analytical questions whose answer lives in it — "show me sessions from last week", "cost breakdown by model", "which tools did I call most", "how much on Opus yesterday", "pull the raw data", "find sessions where…", "longest sessions", "top Bash commands", "top files edited", "cache hit rate", "what skills have I used", "first-turn cache creation", "main-chain vs subagent cost", or any aggregate/filter/ranking over transcripts. Also use for **cache-miss diagnosis** — "why is my prompt cache thrashing", "which turns missed cache and why", "tools_changed cost" (`cache_miss_reason_type` / `cache_missed_input_tokens`); **per-skill / per-subagent cost** — "how much did skill X cost me", "Opus spend by subagent type" (`attribution_skill` / `attribution_agent`); and **API-error diagnostics** — "rate-limit errors", "529s by day" (`api_error_status`). Also use for **cumulative cost attribution** — "what would I save if I compacted bash outputs / trimmed file reads / shrunk CLAUDE.md", "how much is X costing me over the whole session", "is hook Y net-positive", "ROI of compressing tool outputs" — the cumulative model (cache_read paid on every later turn) and the pricing-JOIN sanity-check pattern live in `references/cumulative-cost-analysis.md`. Do NOT use for advice-shaped questions like "how do I reduce my spend" (that belongs to `optimize-usage`), for rebuilding the DB (that's the `cct` binary), or for questions about the transcripts file format itself. The DB has three critical aggregation footguns: raw `assistant_entries` overcounts cost ~2× (use `assistant_entries_deduped`); the same fan-out inflates `GROUP BY` over `cache_miss_reason_type` / `attribution_*` / `api_error_status` (`DO NOT GROUP BY raw`); naive `model_pricing` LIKE-join inflates rates 2-3× (use longest-prefix match) — this skill prevents all three. The new attribution / cache-miss / api-error / new-attachment columns only populate from ~2026-05-01 onward; historical entries have NULL.
 ---
 
@@ -40,6 +41,10 @@ Same rule for `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `c
 ## Forward coverage of new columns (read second)
 
 A batch of fields was added to the JSONL transcript format on or around **2026-05-01**. Older entries do not carry them — the ingester writes NULL. Affected columns: `assistant_entries.attribution_agent`, `attribution_plugin`, `attribution_skill`, `cache_miss_reason_type`, `cache_missed_input_tokens`, `api_error_status`; `attachment_entries.deferred_readded_names`; `user_entries.image_paste_ids`, `plan_content`. New attachment variants emitted from then onward: `auto_mode`, `auto_mode_exit`, `agent_listing_delta`, `plan_file_reference`, `hook_stopped_continuation`, `hook_system_message`, `todo_reminder` (the latter three from ~2026-05-02).
+
+A second batch arrived gradually between **2026-06 and 2026-08** — the per-column cutover dates differ, so check each one with the activation query below rather than assuming a single date (observed first appearances: `prompt_source` ~2026-06, `session_id_snake` 2026-07-08, `attribution_mcp_server` 2026-07-10, `effort` 2026-07-20, `session_kind` 2026-08-06, `reminder_text` 2026-08-18, `thinking_tokens` 2026-08-19, `cron_kind` 2026-08-20). Affected columns: `entries.session_kind`, `entries.session_id_snake`; `assistant_entries.effort`, `thinking_tokens`, `attribution_mcp_server`, `attribution_mcp_tool`, `is_aborted_mid_stream`, `error_details`, `quota_limits`; `user_entries.prompt_source`, `classifier_meta_lines`, `interrupted_message_id`, `tool_denial_kind`, `queue_priority`, `turn_companion`, `mcp_meta`, `user_feedback`; `system_entries.hook_additional_context`, `pending_background_agent_count`, `cron_kind`, `compact_cumulative_dropped_tokens`, `compact_preserved_msg_uuids`, `compact_preserved_msg_all_uuids`, `compact_preserved_msgs_anchor_uuid`; `system_hook_infos.prompt_text`; `attachment_entries.reminder_text`, `truncation_banner`, `goal_*`, `task_*`, `queued_command_timestamp/origin/source_uuid/is_meta`, `deferred_pending_mcp_servers`, `auto_mode_*`. New attachment variants: `total_tokens_reminder`, `read_truncation_notice`, `goal_status`, `task_status`. New entry types: `atis-latch`, `bridge-session`, `file-history-delta`, `frame-link`, `fork-context-ref`, `artifact-autoreact-ledger`, `artifact-comment-monitor`.
+
+⚠️ `entries.session_id_snake` is **not** an alias for `entries.session_id`. Newer clients emit both, and on resumed sessions they diverge (`session_id` keeps the originating id) — ~7.5k of 146k populated rows differ. Always join and `GROUP BY` on `entries.session_id`.
 
 Practical consequence: any **share / distribution / coverage** query that mixes pre- and post-cutover entries will look like the field is sparsely populated. Either filter to `e.timestamp >= '2026-05-01'`, or use `COUNT(*) FILTER (WHERE col IS NOT NULL)` as the denominator instead of `COUNT(*)`. **Total-cost aggregation is unaffected** (`cost_usd` was always populated); only the new categorical/diagnostic fields have this gap.
 
@@ -91,6 +96,20 @@ Each `entries` row has a `type` (`assistant` / `user` / `system` / `attachment` 
 | `progress` | `progress_entries` |
 
 Plus narrow metadata variants (`permission_mode_entries`, `last_prompt_entries`, `ai_title_entries`, `summary_entries`, `pr_link_entries`, `mode_entries`, `tag_entries`, `task_summary_entries`, `worktree_state_entries`, `forked_*`, `marble_origami_*`, `attribution_snapshot_entries`, `content_replacement_entries`, `file_history_snapshot_entries`, `queue_operation_entries`, …). Run `SHOW TABLES` or query `duckdb_columns()` when you need one; most analytical queries don't. The four most recent — `attribution_snapshot_entries` (per-message UI surface + file states + prompt/permission/escape counts), `content_replacement_entries` (text replacements applied to a session), `file_history_snapshot_entries` (file-state snapshots keyed by `message_id`), and `queue_operation_entries` (queue add/remove with timestamps) — are useful for UI/agent-behavior telemetry rather than cost aggregation.
+
+Seven more metadata variants arrived with the 2026-08 format batch, all keyed by `entry_id` like the rest:
+
+| Table | Holds |
+|-------|-------|
+| `atis_latch_entries` | latched ATIS status string replayed on resume (`atis` is empty in practice) |
+| `bridge_session_entries` | link between a local session and the cloud bridge session backing it (`bridge_session_id`, `last_sequence_num`, owner uuids) |
+| `file_history_delta_entries` | one tracked file backed up at one message — the incremental companion to `file_history_snapshot_entries` |
+| `frame_link_entries` | artifacts the session published (`frame_url`, `path`, `title`, `artifact_count`) |
+| `fork_context_ref_entries` | head of a forked subagent transcript: `parent_session_id`, `parent_last_uuid`, `context_length` |
+| `artifact_autoreact_ledger_entries` | per-session ledger of artifacts being auto-reacted to (`artifacts` JSON keyed by artifact uuid) |
+| `artifact_comment_monitor_entries` | per-session artifact comment-watcher state (`artifacts` JSON keyed by artifact uuid) |
+
+`file_history_delta_entries` and `fork_context_ref_entries` carry no session id of their own, so `entries.session_id` is NULL for them — join through `entries.file_path` instead.
 
 Note on `last_prompt_entries`: as of Claude Code's new `last-prompt` format, `last_prompt` is NULL for rows where the transcript stored only `leaf_uuid`. Filter with `WHERE last_prompt IS NOT NULL` to restrict to old-format rows. `leaf_uuid` is a *soft* reference to `entries(uuid)` and does not point at the prompt-text entry — it is the conversation-tree leaf at session-save time. Always join on **both** `uuid` and `session_id`, because `entries(uuid)` is non-unique across resumed sessions:
 
@@ -175,6 +194,22 @@ SELECT model,
 FROM assistant_entries_deduped
 GROUP BY 1 ORDER BY cost_usd DESC;
 ```
+
+### Cost by reasoning effort
+
+`effort` (2026-08 onward) records the tier the turn ran at. `thinking_tokens` is the extended-thinking slice of `output_tokens` — already counted inside it, so never add the two.
+
+```sql
+SELECT d.effort,
+       COUNT(*)                AS turns,
+       ROUND(SUM(d.cost_usd), 2) AS usd,
+       SUM(d.thinking_tokens)  AS thinking_tokens
+FROM assistant_entries_deduped d
+WHERE d.message_id IS NOT NULL
+GROUP BY 1 ORDER BY usd DESC;
+```
+
+NULL `effort` means either a turn from before the field existed **or** a model with no effort tier (all Haiku 4.5 rows are NULL, as are `<synthetic>` error rows) — it does not mean "a turn without reasoning". Filter by `d.model` before drawing conclusions from the NULL bucket.
 
 ### Cost per day
 ```sql

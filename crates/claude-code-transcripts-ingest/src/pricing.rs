@@ -22,21 +22,40 @@ pub struct PriceRow {
 ///   - https://platform.claude.com/docs/en/build-with-claude/prompt-caching
 ///   - https://platform.claude.com/docs/en/about-claude/models/overview
 ///
+/// Fable 5, Mythos 5, Opus 5, Opus 4.8, and Sonnet 5 were captured on
+/// 2026-08-24 from https://platform.claude.com/docs/en/about-claude/pricing
+/// and carry that later `effective_date`. Sonnet 5's $2/$10 launch rate is
+/// permanent as of that capture — the announced 2026-09-01 rise to $3/$15
+/// was cancelled.
+///
 /// Keys use the "alias" or date-stripped form (see `normalize_model`).
 /// Rates are: (input, cache_5m, cache_1h, cache_read, output).
 pub fn seed_rows() -> Vec<PriceRow> {
     let date = "2026-04-17".to_string();
-    let mk = |model: &str, input: f64, c5m: f64, c1h: f64, read: f64, output: f64| PriceRow {
-        model: model.to_string(),
-        input_per_mtok: input,
-        output_per_mtok: output,
-        cache_creation_5m_per_mtok: c5m,
-        cache_creation_1h_per_mtok: c1h,
-        cache_read_per_mtok: read,
-        effective_date: date.clone(),
+    let mk_on =
+        |date: &str, model: &str, input: f64, c5m: f64, c1h: f64, read: f64, output: f64| {
+            PriceRow {
+                model: model.to_string(),
+                input_per_mtok: input,
+                output_per_mtok: output,
+                cache_creation_5m_per_mtok: c5m,
+                cache_creation_1h_per_mtok: c1h,
+                cache_read_per_mtok: read,
+                effective_date: date.to_string(),
+            }
+        };
+    let mk = |model: &str, input: f64, c5m: f64, c1h: f64, read: f64, output: f64| {
+        mk_on(&date, model, input, c5m, c1h, read, output)
     };
+    let aug = "2026-08-24";
     vec![
+        // ── Fable family ──────────────────────────────────────────────────
+        mk_on(aug, "claude-fable-5", 10.00, 12.50, 20.00, 1.00, 50.00),
+        // ── Mythos family (limited availability) ──────────────────────────
+        mk_on(aug, "claude-mythos-5", 10.00, 12.50, 20.00, 1.00, 50.00),
         // ── Opus family ───────────────────────────────────────────────────
+        mk_on(aug, "claude-opus-5", 5.00, 6.25, 10.00, 0.50, 25.00),
+        mk_on(aug, "claude-opus-4-8", 5.00, 6.25, 10.00, 0.50, 25.00),
         mk("claude-opus-4-7", 5.00, 6.25, 10.00, 0.50, 25.00),
         mk("claude-opus-4-6", 5.00, 6.25, 10.00, 0.50, 25.00),
         mk("claude-opus-4-5", 5.00, 6.25, 10.00, 0.50, 25.00),
@@ -44,6 +63,7 @@ pub fn seed_rows() -> Vec<PriceRow> {
         mk("claude-opus-4", 15.00, 18.75, 30.00, 1.50, 75.00),
         mk("claude-opus-4-0", 15.00, 18.75, 30.00, 1.50, 75.00),
         // ── Sonnet family ─────────────────────────────────────────────────
+        mk_on(aug, "claude-sonnet-5", 2.00, 2.50, 4.00, 0.20, 10.00),
         mk("claude-sonnet-4-6", 3.00, 3.75, 6.00, 0.30, 15.00),
         mk("claude-sonnet-4-5", 3.00, 3.75, 6.00, 0.30, 15.00),
         mk("claude-sonnet-4", 3.00, 3.75, 6.00, 0.30, 15.00),
@@ -54,11 +74,13 @@ pub fn seed_rows() -> Vec<PriceRow> {
         mk("claude-3-5-haiku", 0.80, 1.00, 1.60, 0.08, 4.00),
         mk("claude-3-haiku", 0.25, 0.30, 0.50, 0.03, 1.25),
         // ── Family defaults — used when an unknown ID falls through to
-        //    family_key(). Tracks current-flagship rates (Opus 4.7,
-        //    Sonnet 4.6, Haiku 4.5). ──────────────────────────────────────
-        mk("claude-opus", 5.00, 6.25, 10.00, 0.50, 25.00),
-        mk("claude-sonnet", 3.00, 3.75, 6.00, 0.30, 15.00),
+        //    family_key(). Tracks current-flagship rates (Fable 5,
+        //    Mythos 5, Opus 5, Sonnet 5, Haiku 4.5). ──────────────────────
+        mk_on(aug, "claude-opus", 5.00, 6.25, 10.00, 0.50, 25.00),
+        mk_on(aug, "claude-sonnet", 2.00, 2.50, 4.00, 0.20, 10.00),
         mk("claude-haiku", 1.00, 1.25, 2.00, 0.10, 5.00),
+        mk_on(aug, "claude-fable", 10.00, 12.50, 20.00, 1.00, 50.00),
+        mk_on(aug, "claude-mythos", 10.00, 12.50, 20.00, 1.00, 50.00),
     ]
 }
 
@@ -135,7 +157,11 @@ fn normalize_model(model: &str) -> &str {
 /// form are both absent from the pricing table.
 fn family_key(model: &str) -> Option<&'static str> {
     let m = model.to_ascii_lowercase();
-    if m.contains("opus") {
+    if m.contains("fable") {
+        Some("claude-fable")
+    } else if m.contains("mythos") {
+        Some("claude-mythos")
+    } else if m.contains("opus") {
         Some("claude-opus")
     } else if m.contains("sonnet") {
         Some("claude-sonnet")
@@ -221,6 +247,52 @@ mod tests {
         assert_eq!(probe(&p, "claude-opus-9-9"), probe(&p, "claude-opus"));
         assert_eq!(probe(&p, "claude-sonnet-next"), probe(&p, "claude-sonnet"));
         assert_eq!(probe(&p, "claude-haiku-99"), probe(&p, "claude-haiku"));
+        assert_eq!(probe(&p, "claude-fable-6"), probe(&p, "claude-fable"));
+    }
+
+    /// Sonnet 5 is cheaper than Sonnet 4.6 ($2/$10 vs $3/$15) — a rare case
+    /// where a newer model in the same family lowers the rate, so it must have
+    /// its own row rather than inherit an older sibling's.
+    #[test]
+    fn sonnet_5_is_priced_below_sonnet_4_6() {
+        let p = lookup();
+        let s5 = probe(&p, "claude-sonnet-5").expect("sonnet-5 priced");
+        let s46 = probe(&p, "claude-sonnet-4-6").expect("sonnet-4-6 priced");
+        // 1k of each bucket at 2.00 + 2.50 + 4.00 + 0.20 + 10.00 per Mtok.
+        assert!((s5 - 0.0187).abs() < 1e-9, "unexpected sonnet-5 cost {s5}");
+        assert!(s5 < s46, "sonnet-5 should undercut sonnet-4-6");
+    }
+
+    /// Explicit rows for the current flagships must agree with the family
+    /// default they used to fall through to.
+    #[test]
+    fn opus_5_and_4_8_match_the_opus_family_rate() {
+        let p = lookup();
+        assert_eq!(probe(&p, "claude-opus-5"), probe(&p, "claude-opus"));
+        assert_eq!(probe(&p, "claude-opus-4-8"), probe(&p, "claude-opus"));
+    }
+
+    #[test]
+    fn mythos_matches_fable_rates() {
+        let p = lookup();
+        assert_eq!(probe(&p, "claude-mythos-5"), probe(&p, "claude-fable-5"));
+        assert_eq!(
+            probe(&p, "claude-mythos-preview"),
+            probe(&p, "claude-mythos")
+        );
+    }
+
+    #[test]
+    fn fable_is_priced_and_distinct_from_opus() {
+        let p = lookup();
+        let fable = probe(&p, "claude-fable-5").expect("fable-5 priced");
+        let opus = probe(&p, "claude-opus-4-7").expect("opus-4-7 priced");
+        // 1k of each bucket at 10.00 + 12.50 + 20.00 + 1.00 + 50.00 per Mtok.
+        assert!(
+            (fable - 0.0935).abs() < 1e-9,
+            "unexpected fable cost {fable}"
+        );
+        assert!(fable > opus, "fable should out-price opus");
     }
 
     #[test]

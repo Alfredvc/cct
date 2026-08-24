@@ -471,6 +471,9 @@ fn ts_cols(table: &str) -> &'static [usize] {
         "pr_link_entries" => &[5],
         "queue_operation_entries" => &[2],
         "speculation_accept_entries" => &[1],
+        "attachment_entries" => &[63],
+        "file_history_delta_entries" => &[6, 8],
+        "frame_link_entries" => &[6],
         _ => &[],
     }
 }

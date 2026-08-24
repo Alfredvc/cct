@@ -302,8 +302,9 @@ fn build_rows(
     //   uuid, parent_uuid, logical_parent_uuid, is_sidechain,
     //   session_id, timestamp, user_type, entrypoint, cwd, version,
     //   git_branch, slug, agent_id, team_name, agent_name, agent_color,
-    //   prompt_id, is_meta, forked_from_uuid, forked_from_session_id
-    let mut e_row: Vec<Value> = Vec::with_capacity(25);
+    //   prompt_id, is_meta, forked_from_uuid, forked_from_session_id,
+    //   session_kind, session_id_snake
+    let mut e_row: Vec<Value> = Vec::with_capacity(27);
     e_row.push(Value::Null); // entry_id placeholder
     e_row.push(s_str(file_path));
     e_row.push(Value::Number(serde_json::Number::from(line_no)));
@@ -333,6 +334,8 @@ fn build_rows(
         e_row.push(ob(env.is_meta));
         e_row.push(s(env.forked_from.as_ref().map(|f| f.message_uuid.clone())));
         e_row.push(s(env.forked_from.as_ref().map(|f| f.session_id.clone())));
+        e_row.push(s(env.session_kind.clone()));
+        e_row.push(s(env.session_id_snake.clone()));
 
         // capture session_id / timestamps for transcript header
         if session_id_out.is_none() {
@@ -345,7 +348,7 @@ fn build_rows(
             *last_ts = Some(env.timestamp.clone());
         }
     } else {
-        for _ in 0..20 {
+        for _ in 0..22 {
             e_row.push(Value::Null);
         }
         // Some metadata-only entries carry session_id directly.
@@ -402,6 +405,13 @@ fn entry_type_and_subtype(e: &Entry) -> (&'static str, Option<String>) {
         Entry::ContextCollapseCommit(_) => ("marble-origami-commit", None),
         Entry::ContextCollapseSnapshot(_) => ("marble-origami-snapshot", None),
         Entry::SpeculationAccept(_) => ("speculation-accept", None),
+        Entry::AtisLatch(_) => ("atis-latch", None),
+        Entry::BridgeSession(_) => ("bridge-session", None),
+        Entry::FileHistoryDelta(_) => ("file-history-delta", None),
+        Entry::FrameLink(_) => ("frame-link", None),
+        Entry::ForkContextRef(_) => ("fork-context-ref", None),
+        Entry::ArtifactAutoreactLedger(_) => ("artifact-autoreact-ledger", None),
+        Entry::ArtifactCommentMonitor(_) => ("artifact-comment-monitor", None),
         Entry::Unknown => unreachable!("Unknown entries are skipped before build_rows"),
     }
 }
@@ -436,6 +446,13 @@ fn metadata_session_id(e: &Entry) -> Option<&str> {
         Entry::QueueOperation(x) => Some(&x.session_id),
         Entry::ContextCollapseCommit(x) => Some(&x.session_id),
         Entry::ContextCollapseSnapshot(x) => Some(&x.session_id),
+        Entry::AtisLatch(x) => Some(&x.session_id),
+        Entry::BridgeSession(x) => Some(&x.session_id),
+        Entry::FrameLink(x) => Some(&x.session_id),
+        Entry::ArtifactAutoreactLedger(x) => Some(&x.session_id),
+        Entry::ArtifactCommentMonitor(x) => Some(&x.session_id),
+        // file-history-delta and fork-context-ref carry no session id of their
+        // own (the latter references the *parent* session, not this one).
         _ => None,
     }
 }
@@ -683,6 +700,97 @@ fn build_variant(
             )),
             vec![],
         )),
+        Entry::AtisLatch(x) => Ok((
+            Some((
+                "atis_latch_entries",
+                vec![Value::Null, s_str(&x.atis), s_str(&x.session_id)],
+            )),
+            vec![],
+        )),
+        Entry::BridgeSession(x) => Ok((
+            Some((
+                "bridge_session_entries",
+                vec![
+                    Value::Null,
+                    s_str(&x.session_id),
+                    s_str(&x.bridge_session_id),
+                    u(x.last_sequence_num),
+                    s(x.owner_account_uuid.clone()),
+                    s(x.owner_organization_uuid.clone()),
+                ],
+            )),
+            vec![],
+        )),
+        Entry::FileHistoryDelta(x) => Ok((
+            Some((
+                "file_history_delta_entries",
+                vec![
+                    Value::Null,
+                    s_str(&x.message_id),
+                    s_str(&x.snapshot_message_id),
+                    s_str(&x.tracking_path),
+                    s(x.backup.backup_file_name.clone().flatten()),
+                    ou32(Some(x.backup.version)),
+                    s_str(&x.backup.backup_time),
+                    s(x.backup.real_parent_dir.clone()),
+                    s_str(&x.timestamp),
+                ],
+            )),
+            vec![],
+        )),
+        Entry::FrameLink(x) => Ok((
+            Some((
+                "frame_link_entries",
+                vec![
+                    Value::Null,
+                    s_str(&x.session_id),
+                    s(x.path.clone()),
+                    s(x.frame_url.clone()),
+                    s(x.title.clone()),
+                    ou32(x.artifact_count),
+                    s_str(&x.timestamp),
+                ],
+            )),
+            vec![],
+        )),
+        Entry::ForkContextRef(x) => Ok((
+            Some((
+                "fork_context_ref_entries",
+                vec![
+                    Value::Null,
+                    s_str(&x.agent_id),
+                    s_str(&x.parent_session_id),
+                    s_str(&x.parent_last_uuid),
+                    u(x.context_length),
+                ],
+            )),
+            vec![],
+        )),
+        Entry::ArtifactAutoreactLedger(x) => Ok((
+            Some((
+                "artifact_autoreact_ledger_entries",
+                vec![
+                    Value::Null,
+                    ou32(Some(x.v)),
+                    s_str(&x.session_id),
+                    s_str(&x.account_uuid),
+                    json_str(&json!(x.artifacts)),
+                ],
+            )),
+            vec![],
+        )),
+        Entry::ArtifactCommentMonitor(x) => Ok((
+            Some((
+                "artifact_comment_monitor_entries",
+                vec![
+                    Value::Null,
+                    ou32(Some(x.v)),
+                    s_str(&x.session_id),
+                    json_str(&json!(x.artifacts)),
+                ],
+            )),
+            vec![],
+        )),
         Entry::Unknown => unreachable!("Unknown entries are skipped before build_rows"),
     }
 }
@@ -720,6 +828,14 @@ fn build_user(
             None => Value::Null,
         },
         s(ue.plan_content.clone()),
+        s(ue.prompt_source.clone()),
+        s(ue.classifier_meta_lines.clone()),
+        s(ue.interrupted_message_id.clone()),
+        s(ue.tool_denial_kind.clone()),
+        s(ue.queue_priority.clone()),
+        ob(ue.turn_companion),
+        ojson(ue.mcp_meta.as_ref()),
+        s(ue.user_feedback.clone()),
     ];
 
     let mut child_rows: Vec<Vec<Value>> = Vec::new();
@@ -861,6 +977,12 @@ fn build_assistant(
         unknown_models.push(model_str.to_string());
     }
 
+    let thinking_tokens = usage
+        .output_tokens_details
+        .as_ref()
+        .and_then(|outer| outer.as_ref())
+        .map(|d| d.thinking_tokens);
+
     let tool_use_count = m
         .content
         .iter()
@@ -900,6 +1022,16 @@ fn build_assistant(
         s(ae.attribution_skill.clone()),             // attribution_skill
         s(cmr_type),                                 // cache_miss_reason_type
         ou(cmr_tokens),                              // cache_missed_input_tokens
+        s(ae.attribution_mcp_server.clone()),        // attribution_mcp_server
+        s(ae.attribution_mcp_tool.clone()),          // attribution_mcp_tool
+        s(ae.effort.clone()),                        // effort
+        ou(thinking_tokens),                         // thinking_tokens
+        ob(ae.is_aborted_mid_stream),                // is_aborted_mid_stream
+        s(ae.error_details.clone()),                 // error_details
+        match &ae.quota_limits {
+            Some(q) => json_str(&json!(q)),
+            None => Value::Null,
+        }, // quota_limits
     ];
 
     let mut block_rows: Vec<Vec<Value>> = Vec::new();
@@ -1058,6 +1190,22 @@ fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> BuiltRows {
             Some(v) => json_str(&json!(v)),
             None => Value::Null,
         },
+        match &se.hook_additional_context {
+            Some(v) => json_str(&json!(v)),
+            None => Value::Null,
+        },
+        ou32(se.pending_background_agent_count),
+        s(se.cron_kind.clone()),
+        ou(cm.and_then(|c| c.cumulative_dropped_tokens)),
+        s(cm.and_then(|c| c.preserved_messages.as_ref().map(|p| p.anchor_uuid.clone()))),
+        match cm.and_then(|c| c.preserved_messages.as_ref()) {
+            Some(p) => json_str(&json!(p.uuids)),
+            None => Value::Null,
+        },
+        match cm.and_then(|c| c.preserved_messages.as_ref()) {
+            Some(p) => json_str(&json!(p.all_uuids)),
+            None => Value::Null,
+        },
     ];
 
     let mut hook_rows: Vec<Vec<Value>> = Vec::new();
@@ -1068,6 +1216,7 @@ fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> BuiltRows {
                 u(idx as u64),
                 s_str(&hi.command),
                 ou(hi.duration_ms),
+                s(hi.prompt_text.clone()),
             ]);
         }
     }
@@ -1085,7 +1234,7 @@ fn build_attachment(
 ) -> BuiltRows {
     use AttachmentData::*;
     // Initialise wide row as all NULL then fill the relevant slots.
-    let mut row: Vec<Value> = vec![Value::Null; 48];
+    let mut row: Vec<Value> = vec![Value::Null; 73];
     // index 0 = entry_id placeholder, index 1 = attachment_type
     let mut diag_rows: Vec<Vec<Value>> = Vec::new();
     let mut skill_rows: Vec<Vec<Value>> = Vec::new();
@@ -1108,7 +1257,7 @@ fn build_attachment(
         PlanModeExit { .. } => "plan_mode_exit",
         PlanFileReference { .. } => "plan_file_reference",
         AutoMode { .. } => "auto_mode",
-        AutoModeExit => "auto_mode_exit",
+        AutoModeExit { .. } => "auto_mode_exit",
         SkillListing { .. } => "skill_listing",
         DynamicSkill { .. } => "dynamic_skill",
         InvokedSkills { .. } => "invoked_skills",
@@ -1122,6 +1271,10 @@ fn build_attachment(
         UltrathinkEffort { .. } => "ultrathink_effort",
         QueuedCommand { .. } => "queued_command",
         NestedMemory { .. } => "nested_memory",
+        TotalTokensReminder { .. } => "total_tokens_reminder",
+        ReadTruncationNotice { .. } => "read_truncation_notice",
+        GoalStatus { .. } => "goal_status",
+        TaskStatus { .. } => "task_status",
         Unknown => "unknown",
     };
     row[1] = s_str(attach_type);
@@ -1141,7 +1294,16 @@ fn build_attachment(
     // 39 mcp_removed_names, 40 ultrathink_level, 41 queued_command_prompt,
     // 42 queued_command_mode, 43 nested_memory_path, 44 nested_memory_memory_type,
     // 45 nested_memory_content, 46 nested_memory_differs_from_disk,
-    // 47 deferred_readded_names
+    // 47 deferred_readded_names, 48 reminder_text, 49 truncation_banner,
+    // 50 goal_met, 51 goal_condition, 52 goal_sentinel, 53 goal_reason,
+    // 54 goal_iterations, 55 goal_duration_ms, 56 goal_tokens, 57 task_id,
+    // 58 task_type, 59 task_description, 60 task_status,
+    // 61 task_delta_summary, 62 task_output_file_path,
+    // 63 queued_command_timestamp, 64 queued_command_origin,
+    // 65 queued_command_source_uuid, 66 queued_command_is_meta,
+    // 67 deferred_pending_mcp_servers, 68 auto_mode_reminder_type,
+    // 69 auto_mode_consent_flow, 70 auto_mode_bash_first,
+    // 71 auto_mode_steer_only, 72 auto_mode_bypass
 
     let fill_hook = |row: &mut Vec<Value>,
                      h: &claude_code_transcripts::types::HookResultAttachment| {
@@ -1258,10 +1420,17 @@ fn build_attachment(
             content,
             is_initial,
             skill_count,
+            names,
         } => {
             row[23] = s_str(content);
             row[24] = ob(*is_initial);
             row[25] = ou32(*skill_count);
+            // Shares the skill_names column with dynamic_skill: both hold a
+            // JSON array of skill slugs.
+            row[27] = match names {
+                Some(v) => json_str(&json!(v)),
+                None => Value::Null,
+            };
         }
         DynamicSkill {
             skill_dir,
@@ -1314,6 +1483,7 @@ fn build_attachment(
             added_lines,
             removed_names,
             readded_names,
+            pending_mcp_servers,
         } => {
             row[34] = json_str(&json!(added_names));
             row[35] = match added_lines {
@@ -1328,6 +1498,10 @@ fn build_attachment(
                 Some(v) => json_str(&json!(v)),
                 None => Value::Null,
             };
+            row[67] = match pending_mcp_servers {
+                Some(v) => json_str(&json!(v)),
+                None => Value::Null,
+            };
         }
         AgentListingDelta { .. } => {
             // Classify-only: attachment_type column captures the variant.
@@ -1335,8 +1509,25 @@ fn build_attachment(
             // /showConcurrencyNote) are not flattened into dedicated columns —
             // the agent listing payload is verbose and out of scope here.
         }
-        AutoMode { .. } | AutoModeExit => {
-            // Classify-only: attachment_type captures the variant.
+        AutoMode {
+            reminder_type,
+            auto_mode_consent_flow,
+            bash_first,
+            steer_only,
+            bypass,
+        } => {
+            row[68] = s(reminder_type.clone());
+            row[69] = ob(*auto_mode_consent_flow);
+            row[70] = ob(*bash_first);
+            row[71] = ob(*steer_only);
+            row[72] = ob(*bypass);
+        }
+        AutoModeExit {
+            bash_first,
+            steer_only,
+        } => {
+            row[70] = ob(*bash_first);
+            row[71] = ob(*steer_only);
         }
         PlanFileReference {
             plan_file_path,
@@ -1368,6 +1559,10 @@ fn build_attachment(
             prompt,
             command_mode,
             image_paste_ids: _,
+            timestamp,
+            origin,
+            source_uuid,
+            is_meta,
         } => {
             row[41] = match prompt {
                 Value::String(t) => s_str(t),
@@ -1390,6 +1585,10 @@ fn build_attachment(
                 other => json_str(other),
             };
             row[42] = s(command_mode.clone());
+            row[63] = s(timestamp.clone());
+            row[64] = ojson(origin.as_ref());
+            row[65] = s(source_uuid.clone());
+            row[66] = ob(*is_meta);
         }
         NestedMemory {
             path,
@@ -1404,6 +1603,48 @@ fn build_attachment(
                 Some(v) => b(v),
                 None => Value::Null,
             };
+        }
+        TotalTokensReminder { text } => {
+            row[48] = s_str(text);
+        }
+        ReadTruncationNotice {
+            banner,
+            tool_use_id,
+        } => {
+            row[3] = s_str(tool_use_id);
+            row[49] = s_str(banner);
+        }
+        GoalStatus {
+            met,
+            condition,
+            sentinel,
+            reason,
+            iterations,
+            duration_ms,
+            tokens,
+        } => {
+            row[50] = b(*met);
+            row[51] = s_str(condition);
+            row[52] = ob(*sentinel);
+            row[53] = s(reason.clone());
+            row[54] = ou32(*iterations);
+            row[55] = ou(*duration_ms);
+            row[56] = ou(*tokens);
+        }
+        TaskStatus {
+            task_id,
+            task_type,
+            description,
+            status,
+            delta_summary,
+            output_file_path,
+        } => {
+            row[57] = s_str(task_id);
+            row[58] = s_str(task_type);
+            row[59] = s_str(description);
+            row[60] = s_str(status);
+            row[61] = s(delta_summary.clone().flatten());
+            row[62] = s_str(output_file_path);
         }
         Unknown => {
             unknown_variants.push("AttachmentData".to_string());
