@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.12] - 2026-08-25
+
+### 🚀 Features
+
+- *(schema)* Cover the 2026-06→08 transcript format drift
+
 ## [0.1.11] - 2026-05-05
 
 ### 🚀 Features
@@ -25,6 +31,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Backfill v0.1.10 changelog section
+- Release v0.1.11
 
 ## [0.1.10] - 2026-05-03
 
