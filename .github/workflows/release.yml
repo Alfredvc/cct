@@ -22,6 +22,8 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve version from tag
         id: version
@@ -30,6 +32,14 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip all
+        env:
+          OUTPUT: RELEASE_NOTES.md
 
       - name: Create draft release
         env:
@@ -40,7 +50,9 @@ jobs:
             gh release create "$TAG" \
               --draft \
               --title "$TAG" \
-              --generate-notes
+              --notes-file RELEASE_NOTES.md
+          else
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
           fi
 
   build:
